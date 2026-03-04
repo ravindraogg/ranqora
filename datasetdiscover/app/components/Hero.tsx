@@ -77,7 +77,7 @@ export function Hero() {
                                 <div className="w-3 h-3 rounded-full bg-green-400/80"></div>
                             </div>
                             <div className="mx-auto flex h-6 items-center rounded-md bg-white dark:bg-black px-48 border border-gray-200 dark:border-gray-800 text-xs text-gray-400">
-                                ranqora.ai / search
+                                ranqora / search
                             </div>
                         </div>
 

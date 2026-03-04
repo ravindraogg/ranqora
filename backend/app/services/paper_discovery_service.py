@@ -38,13 +38,40 @@ DATASET_PATTERNS = [
 
 # Common false positives to filter out
 FALSE_POSITIVES = {
-    "We", "The", "Our", "This", "In", "For", "Table", "Figure",
-    "Section", "Appendix", "Results", "Methods", "Conclusion",
-    "Abstract", "Introduction", "Related", "Experiments",
-    "CNN", "RNN", "GAN", "LSTM", "BERT", "GPT", "ResNet",
-    "VGG", "Adam", "SGD", "IEEE", "CVPR", "ICCV", "ECCV",
-    "NeurIPS", "ICML", "AAAI", "ACL", "EMNLP", "NAACL",
-    "State", "Deep", "Neural", "Machine", "Learning",
+    # English words that match patterns
+    "We", "The", "Our", "This", "In", "For", "An", "A", "It", "Its",
+    "As", "At", "By", "On", "Or", "If", "To", "Up", "So", "No",
+    "All", "Any", "Are", "But", "Can", "Did", "Do", "Get", "Got",
+    "Had", "Has", "Her", "Him", "His", "How", "Its", "May", "New",
+    "Now", "Old", "One", "Out", "Own", "Per", "Set", "Two", "Use",
+    "Was", "Way", "Who", "Why", "Yet",
+    "Each", "From", "Have", "Here", "Into", "Just", "Like", "Make",
+    "Many", "More", "Most", "Much", "Must", "Next", "Only", "Over",
+    "Such", "Than", "That", "Then", "They", "Very", "What", "When",
+    "With", "Also", "Some", "Will", "Both", "Used", "Based", "Given",
+    "First", "Second", "Third", "Large", "Small", "These", "Those",
+    "Other", "After", "Before", "Every", "While", "Where", "About",
+    "Using", "Current", "Several", "Recent", "Previous", "Proposed",
+    "Different", "Various", "Existing", "Specific", "Multiple",
+
+    # Paper section names
+    "Table", "Figure", "Section", "Appendix", "Results", "Methods",
+    "Conclusion", "Abstract", "Introduction", "Related", "Experiments",
+    "Discussion", "Evaluation", "Analysis",
+
+    # ML model names (not datasets)
+    "CNN", "RNN", "GAN", "LSTM", "BERT", "GPT", "ResNet", "VGG",
+    "Adam", "SGD", "ViT", "CLIP", "SAM", "LLaMA", "Llama",
+    "Transformer", "Attention", "Encoder", "Decoder",
+
+    # Venue names
+    "IEEE", "CVPR", "ICCV", "ECCV", "NeurIPS", "ICML", "AAAI",
+    "ACL", "EMNLP", "NAACL", "ICLR", "SIGIR", "KDD", "WWW",
+
+    # Generic ML terms
+    "State", "Deep", "Neural", "Machine", "Learning", "Model",
+    "Network", "Architecture", "Framework", "Method", "Approach",
+    "Performance", "Accuracy", "Training", "Fine", "Pre",
 }
 
 
@@ -56,7 +83,7 @@ class PaperDiscoveryService:
         Search papers and extract dataset names.
         
         Returns a list of dataset name strings to be used as search seeds.
-        Example: ["DRIVE", "CHASE_DB1", "IDRiD", "Messidor"]
+        Example: ["DRIVE dataset", "CHASE_DB1 dataset", "IDRiD dataset"]
         """
         papers = await self._search_papers(query, max_papers)
         
@@ -73,22 +100,49 @@ class PaperDiscoveryService:
         return dataset_names
 
     async def _search_papers(self, query: str, limit: int) -> List[Dict[str, str]]:
-        """Search Semantic Scholar, fallback to ArXiv."""
-        papers = await self._search_semantic_scholar(query, limit)
-        if not papers:
-            papers = await self._search_arxiv(query, limit)
-        return papers
+        """Search both Semantic Scholar AND ArXiv, merge results."""
+        # Run both in parallel for speed
+        s2_papers, arxiv_papers = await asyncio.gather(
+            self._search_semantic_scholar(query, limit),
+            self._search_arxiv(query, limit),
+            return_exceptions=True,
+        )
+        
+        papers = []
+        if isinstance(s2_papers, list):
+            papers.extend(s2_papers)
+        else:
+            logger.warning(f"Semantic Scholar error: {s2_papers}")
+            
+        if isinstance(arxiv_papers, list):
+            papers.extend(arxiv_papers)
+        else:
+            logger.warning(f"ArXiv error: {arxiv_papers}")
+        
+        # Deduplicate by title similarity
+        seen_titles = set()
+        unique = []
+        for p in papers:
+            title_key = re.sub(r'[^a-z0-9]', '', p.get("title", "").lower())
+            if title_key not in seen_titles:
+                seen_titles.add(title_key)
+                unique.append(p)
+        
+        return unique[:limit]
 
     async def _search_semantic_scholar(self, query: str, limit: int) -> List[Dict[str, str]]:
         """Search Semantic Scholar free API."""
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 params = {
-                    "query": query,
+                    "query": f"{query} dataset benchmark",
                     "limit": limit,
                     "fields": "title,abstract,year,citationCount",
                 }
                 resp = await client.get(S2_SEARCH_URL, params=params)
+                if resp.status_code == 429:
+                    logger.info("Semantic Scholar rate-limited (429), will use ArXiv.")
+                    return []
                 if resp.status_code != 200:
                     logger.warning(f"Semantic Scholar returned {resp.status_code}")
                     return []
@@ -110,7 +164,7 @@ class PaperDiscoveryService:
             return []
 
     async def _search_arxiv(self, query: str, limit: int) -> List[Dict[str, str]]:
-        """Fallback ArXiv search."""
+        """ArXiv paper search (always runs, not just fallback)."""
         try:
             search_query = f"all:{query} AND (abs:dataset OR abs:benchmark)"
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -125,17 +179,17 @@ class PaperDiscoveryService:
                 if resp.status_code != 200:
                     return []
 
-            ns = {"atom": "http://www.w3.org/2005/Atom"}
-            root = ET.fromstring(resp.text)
-            papers = []
-            for entry in root.findall("atom:entry", ns):
-                title = (entry.findtext("atom:title", "", ns) or "").strip().replace("\n", " ")
-                abstract = (entry.findtext("atom:summary", "", ns) or "").strip().replace("\n", " ")
-                if title and abstract:
-                    papers.append({"title": title, "abstract": abstract, "citations": 0})
-            return papers
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                root = ET.fromstring(resp.text)
+                papers = []
+                for entry in root.findall("atom:entry", ns):
+                    title = (entry.findtext("atom:title", "", ns) or "").strip().replace("\n", " ")
+                    abstract = (entry.findtext("atom:summary", "", ns) or "").strip().replace("\n", " ")
+                    if title and abstract:
+                        papers.append({"title": title, "abstract": abstract, "citations": 0})
+                return papers
         except Exception as e:
-            logger.warning(f"ArXiv fallback search failed: {e}")
+            logger.warning(f"ArXiv search failed: {e}")
             return []
 
     def _extract_all_dataset_names(self, papers: List[Dict[str, str]]) -> List[str]:
@@ -147,18 +201,31 @@ class PaperDiscoveryService:
             names = self._extract_dataset_names(text)
             all_names.update(names)
         
-        # Filter false positives and short names
-        filtered = [
-            name for name in all_names
-            if name not in FALSE_POSITIVES
-            and len(name) >= 3
-            and not name.isupper() or len(name) <= 8  # Allow short acronyms like "DRIVE"
-        ]
+        # Filter false positives, short names, and common English words
+        filtered = []
+        for name in all_names:
+            # Skip if in blocklist
+            if name in FALSE_POSITIVES:
+                continue
+            # Skip if too short (< 3 chars) — except known acronyms
+            if len(name) < 3:
+                continue
+            # Skip common English words (all lowercase after first letter)
+            if len(name) <= 6 and name[0].isupper() and name[1:].islower():
+                # Could be a common word like "Current", "Several", etc.
+                if name.lower() in {w.lower() for w in FALSE_POSITIVES}:
+                    continue
+            # Skip if it looks like a generic adjective/noun
+            if name.lower() in {"large", "small", "new", "real", "raw", "full",
+                                "clean", "original", "standard", "public", "open",
+                                "complete", "entire", "whole", "custom"}:
+                continue
+            filtered.append(name)
         
         # Append "dataset" to each name for better search results
         seeds = [f"{name} dataset" for name in filtered]
         
-        return seeds[:15]  # Cap at 15 seeds to avoid overloading retrieval
+        return seeds[:15]  # Cap at 15 seeds
 
     @staticmethod
     def _extract_dataset_names(text: str) -> List[str]:
@@ -182,6 +249,9 @@ class PaperDiscoveryService:
         
         return list(mentions)
 
+
+# Need asyncio for parallel search
+import asyncio
 
 # Module singleton
 paper_discovery = PaperDiscoveryService()

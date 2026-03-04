@@ -208,7 +208,7 @@ export default function TopDatasetsPage() {
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                         <div className="hidden md:flex h-9 px-5 items-center justify-center rounded-full bg-gray-50 dark:bg-black border border-gray-200 dark:border-white/10 text-xs font-mono text-gray-500 shadow-inner whitespace-nowrap">
-                            ranqora.ai / top datasets
+                            ranqora / top datasets
                         </div>
                     </div>
                     <div className="hidden sm:flex items-center gap-2 opacity-70">

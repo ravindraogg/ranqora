@@ -433,21 +433,17 @@ def rank_datasets(
     Multi-factor ranking engine with split-field embeddings + dataset intelligence.
 
     Scoring formula:
-      R_i = (0.30*E + 0.15*T + 0.12*DT + 0.10*K + 0.08*FM
-            + 0.10*Q + 0.05*P + 0.05*G + 0.03*L + 0.02*F)
-            + intent_bonus * src_penalty * anti_keyword_penalty
+    Scoring formula:
+      R_i = (0.45*E + 0.20*T + 0.10*K + 0.10*Q + 0.10*G + 0.05*P)
+            * type_match_penalty * intent_bonus * src_penalty * anti_keyword_penalty
 
     Where:
       E  = Weighted semantic similarity (0.4*title + 0.3*tags + 0.3*desc)
       T  = Task alignment (also split-field)
-      DT = Dataset type match (from intelligence layer)
       K  = Keyword overlap (sqrt normalized)
-      FM = Format match (from intelligence layer)
       Q  = Quality (completeness)
       P  = Popularity (community signal)
-      G  = Graph centrality (pure PageRank + citations)
-      L  = License openness
-      F  = Freshness
+      G  = Graph relevance (built across type-filtered topology)
     """
     if not dataset_candidates:
         return []
@@ -522,9 +518,19 @@ def rank_datasets(
     else:
         task_scores = [0.5 for _ in filtered_candidates]
 
-    # ── 3. Graph Centrality (G_i) — pure centrality ──
+    # ── 3. Dataset Type Filter + Graph Mapping ──
+    # Map valid types first
+    valid_candidates = []
+    type_penalties = []
+    for ds in filtered_candidates:
+        DT_i = dataset_intelligence.type_match_score(ds, domain)
+        type_penalties.append(DT_i)
+        
     candidate_ids = [ds["id"] for ds in filtered_candidates]
+    # Graph layer maps topology across explicitly retrieved IDs + type penalties
     graph_scores = graph_service.calculate_graph_scores(candidate_ids)
+    
+    # Apply type isolation to graph structure dynamically (penalty logic happens in final composite)
 
     # ── Keyword Overlap (K_i) ──
     query_words = set(re.findall(r'\w+', query.lower()))
@@ -560,21 +566,17 @@ def rank_datasets(
         F_i = _score_freshness(ds.get("last_modified"))
 
         # ── Dataset Intelligence signals ──
-        DT_i = dataset_intelligence.type_match_score(ds, domain)
-        FM_i = dataset_intelligence.format_match_score(ds, preferred_format)
+        # Captured earlier in loop
+        DT_i = type_penalties[i]
 
-        # Rebalanced formula with intelligence signals
+        # Rebalanced formula prioritizing semantic clusters
         base_score = (
-            (0.30 * E_i) +
-            (0.15 * T_i) +
-            (0.12 * DT_i) +
+            (0.45 * E_i) +
+            (0.20 * T_i) +
             (0.10 * K_i) +
-            (0.08 * FM_i) +
             (0.10 * Q_i) +
-            (0.05 * P_i) +
-            (0.05 * G_i) +
-            (0.03 * L_i) +
-            (0.02 * F_i)
+            (0.10 * G_i) +
+            (0.05 * P_i)
         )
 
         # ── Additive task intent bonus (capped at 0.10) ──
@@ -585,6 +587,12 @@ def rank_datasets(
 
         # ── Anti-keyword signal ratio penalty ──
         anti_penalty = _anti_keyword_penalty(ds, anti_keywords or [], constraint_terms)
+        
+        # ── Graph + Type Isolation Penalty ──
+        # Drastically penalize graph scores leaking across misaligned boundaries
+        if DT_i < 0.5:
+            G_i = G_i * 0.3
+            base_score *= 0.8  # universal type deduction
 
         final_score = (base_score + intent_bonus) * src_penalty * anti_penalty
 

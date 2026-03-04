@@ -2,7 +2,7 @@ import { Navbar } from "./components/Navbar";
 import { Hero } from "./components/Hero";
 import { Features } from "./components/Features";
 import { Footer } from "./components/Footer";
-import { Analytics } from "@vercel/analytics/next"
+
 export default function Home() {
   return (
     <div className="bg-white dark:bg-black min-h-screen">
@@ -10,7 +10,6 @@ export default function Home() {
       <Hero />
       <Features />
       <Footer />
-      <Analytics />
     </div>
   );
 }

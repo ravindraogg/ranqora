@@ -5,6 +5,8 @@ from typing import List, Dict, Any
 from neo4j import GraphDatabase, exceptions
 
 from app.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+from app.services.embedding_service import get_embeddings
+from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,29 @@ class GraphService:
         if not self._ensure_driver() or not candidates:
             return
 
+        datasets_to_embed = []
+        for cand in candidates:
+            if cand.get("source") != "arxiv":
+                desc = cand.get("description", "") or ""
+                title = cand.get("id", "") or ""
+                datasets_to_embed.append({
+                    "id": cand["id"],
+                    "text": title + " " + desc[:200]
+                })
+        
+        sim_edges = []
+        if datasets_to_embed:
+            texts = [d["text"] for d in datasets_to_embed]
+            try:
+                embs = get_embeddings(texts)
+                sim_matrix = cosine_similarity(embs)
+                for i in range(len(datasets_to_embed)):
+                    for j in range(i + 1, len(datasets_to_embed)):
+                        if sim_matrix[i][j] > 0.75:
+                            sim_edges.append((datasets_to_embed[i]["id"], datasets_to_embed[j]["id"]))
+            except Exception as e:
+                logger.error(f"Failed to compute embeddings for similarity edges: {e}")
+
         with self.driver.session() as session:
             # Upsert Query context
             try:
@@ -82,13 +107,14 @@ class GraphService:
                 
                 try:
                     if source == "arxiv":
+                        citations = cand.get("citations", cand.get("citationCount", 1))
                         session.run("""
                             MERGE (p:Paper {id: $id})
-                            SET p.url = $url, p.title = $desc
+                            SET p.url = $url, p.title = $desc, p.citations = $citations
                             WITH p
                             MATCH (q:Query {text: $query_text})
                             MERGE (q)-[:RETRIEVED]->(p)
-                        """, id=ds_id, url=cand.get("url", ""), desc=cand.get("description", "")[:100], query_text=query)
+                        """, id=ds_id, url=cand.get("url", ""), desc=cand.get("description", "")[:100], citations=citations, query_text=query)
                         
                         if tags:
                             session.run("""
@@ -102,6 +128,9 @@ class GraphService:
                             MERGE (d:Dataset {id: $id})
                             SET d.source = $source, d.downloads = $downloads, d.likes = $likes
                             WITH d
+                            MERGE (s:Source {name: $source})
+                            MERGE (s)-[:HOSTS]->(d)
+                            WITH d
                             MATCH (q:Query {text: $query_text})
                             MERGE (q)-[:RETRIEVED]->(d)
                         """, id=ds_id, source=source, downloads=cand.get("downloads", 0), likes=cand.get("likes", 0), query_text=query)
@@ -111,11 +140,34 @@ class GraphService:
                                 MATCH (d:Dataset {id: $id})
                                 UNWIND $tags AS tag
                                 MERGE (t:Task {name: toLower(tag)})
-                                MERGE (d)-[:USE_CASE]->(t)
+                                MERGE (d)-[:USED_FOR]->(t)
+                                MERGE (t)-[:USES]->(d)
                             """, id=ds_id, tags=tags)
+                            
+                            benchmark_flags = [t for t in tags if "benchmark" in t.lower() or "dataset" in t.lower()]
+                            if (benchmark_flags or cand.get("downloads", 0) > 10000) and tasks:
+                                try:
+                                    session.run("""
+                                        MATCH (d:Dataset {id: $id})
+                                        UNWIND $tasks AS task_name
+                                        MERGE (t:Task {name: toLower(task_name)})
+                                        MERGE (d)-[:BENCHMARK_FOR]->(t)
+                                    """, id=ds_id, tasks=tasks)
+                                except Exception: pass
                 except Exception as e:
                     logger.error(f"Failed to ingest candidate {ds_id}: {e}")
                     raise
+
+            if sim_edges:
+                try:
+                    session.run("""
+                        UNWIND $edges AS edge
+                        MATCH (d1:Dataset {id: edge[0]}), (d2:Dataset {id: edge[1]})
+                        MERGE (d1)-[:SIMILAR_TO]->(d2)
+                        MERGE (d2)-[:SIMILAR_TO]->(d1)
+                    """, edges=sim_edges)
+                except Exception as e:
+                    logger.error(f"Failed to ingest similarity edges: {e}")
 
 
     def calculate_graph_scores(self, candidate_ids: List[str]) -> Dict[str, float]:
@@ -133,11 +185,13 @@ class GraphService:
         with self.driver.session() as session:
             # 1. Pull the subgraph structure
             edges_result = session.run("""
-                MATCH (n)-[r]->(m)
-                WHERE (n:Dataset OR n:Paper OR n:Query) AND (m:Dataset OR m:Paper OR m:Query OR m:Task)
+                MATCH (n)-[r]-(m)
+                WHERE (n:Dataset AND n.id IN $candidates) 
+                   OR (m:Dataset AND m.id IN $candidates)
                 RETURN elementId(n) AS source, elementId(m) AS target, 
-                       labels(m) AS target_labels, m.id AS target_id
-            """)
+                       labels(m) AS target_labels, m.id AS target_id,
+                       type(r) AS rel_type, n.citations AS source_citations
+            """, candidates=candidate_ids)
             
             # 2. Build local NX DiGraph
             G = nx.DiGraph()
@@ -148,15 +202,30 @@ class GraphService:
             for record in edges_result:
                 u = record["source"]
                 v = record["target"]
-                G.add_edge(u, v)
+                rel = record["rel_type"]
+                src_cites = record.get("source_citations")
+                src_cites = int(src_cites) if src_cites else 1
+                
+                weight = 1.0
+                if rel == "CITES_DATASET":
+                    weight = 3.0 + min(float(src_cites) * 0.1, 10.0)
+                elif rel in ("SIMILAR_TO", "CITES"):
+                    weight = 2.0
+                elif rel == "BENCHMARK_FOR":
+                    weight = 4.0
+                    
+                G.add_edge(u, v, weight=weight)
                 
                 t_id = record["target_id"]
                 if t_id and t_id in citations:
-                    citations[t_id] += 1
+                    if rel == "CITES_DATASET":
+                        citations[t_id] += src_cites
+                    else:
+                        citations[t_id] += 1
             
             # 4. Compute PageRank
             try:
-                pagerank = nx.pagerank(G, alpha=0.85, max_iter=100)
+                pagerank = nx.pagerank(G, alpha=0.85, weight='weight', max_iter=100)
             except Exception:
                 pagerank = {}
 

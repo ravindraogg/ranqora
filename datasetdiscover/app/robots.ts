@@ -7,6 +7,6 @@ export default function robots(): MetadataRoute.Robots {
             allow: "/",
             disallow: ["/api/", "/dataset/preview/"], // Wait I shouldn't guess, let's just make it basic
         },
-        sitemap: "https://ranqora.ai/sitemap.xml",
+        sitemap: "https://ranqora.vercel.app/sitemap.xml",
     };
 }

@@ -587,7 +587,7 @@ function SearchResultsContent() {
                         </Link>
                     </div>
                     <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex h-9 w-96 items-center justify-center rounded-full bg-gray-50 dark:bg-black border border-gray-200 dark:border-white/10 text-sm font-mono text-gray-500 shadow-inner">
-                        ranqora.ai / search / results
+                        ranqora / search / results
                     </div>
                     <div className="flex items-center gap-3">
                         {/* Timer */}
