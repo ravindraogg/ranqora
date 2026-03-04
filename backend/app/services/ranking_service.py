@@ -1,0 +1,625 @@
+import math
+import numpy as np
+import re
+import logging
+from datetime import datetime, timezone
+from dateutil import parser as date_parser
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List, Dict, Any
+from app.services.embedding_service import get_embedding, get_embeddings
+from app.services.graph_service import graph_service
+from app.services.learning_service import learning_ranker
+from app.services.dataset_intelligence_service import dataset_intelligence
+
+logger = logging.getLogger(__name__)
+
+# License scoring heuristic (0.0 to 1.0)
+LICENSE_SCORES = {
+    "mit": 1.0, "apache-2.0": 1.0, "bsd-2-clause": 1.0, "bsd-3-clause": 1.0,
+    "cc0-1.0": 1.0, "unlicense": 1.0, "pddl": 1.0, "cc-by-4.0": 0.9,
+    "arxiv-paper": 1.0,
+    "gpl-3.0": 0.5, "gpl-2.0": 0.5, "cc-by-sa-4.0": 0.6, "cc-by-nc-4.0": 0.4,
+    "cc-by-nc-sa-4.0": 0.3, "odc-by": 0.8,
+    "unknown": 0.1, "other": 0.1
+}
+
+# ── Task Intent Keywords ─────────────────────────────────────────────────────
+TASK_INTENT_KEYWORDS: Dict[str, List[str]] = {
+    "segmentation":       ["segmentation", "mask", "pixel", "annotation", "labeled", "contour", "boundary", "polygon"],
+    "object detection":   ["detection", "bounding box", "bbox", "yolo", "coco", "annotation", "labeled"],
+    "classification":     ["classification", "class", "label", "category", "predict"],
+    "regression":         ["regression", "continuous", "predict", "numeric"],
+    "forecasting":        ["forecast", "time series", "prediction", "temporal", "sequential"],
+    "sentiment analysis": ["sentiment", "opinion", "positive", "negative", "review"],
+    "ner":                ["ner", "entity", "named entity", "token", "tagging", "iob"],
+    "question answering": ["qa", "question", "answer", "squad", "reading comprehension"],
+    "speech recognition": ["speech", "asr", "transcript", "audio", "voice", "utterance"],
+    "image generation":   ["generation", "gan", "diffusion", "synthetic", "generative"],
+    "clustering":         ["clustering", "cluster", "unsupervised", "topic", "grouping", "kmeans"],
+    "topic modeling":     ["topic", "lda", "theme", "category", "topic model"],
+}
+
+# ── Source-type penalty ──────────────────────────────────────────────────────
+SOURCE_PENALTIES: Dict[str, float] = {
+    "github":  0.85,
+    "arxiv":   0.90,
+}
+
+DATASET_INDICATOR_KEYWORDS = [
+    "dataset", "benchmark", "corpus", "data", "annotations",
+    "labeled", "training set", "test set", "csv", "parquet"
+]
+
+# ── Title noise tokens to remove before embedding ───────────────────────────
+TITLE_NOISE_TOKENS = {
+    "dataset", "data", "ml", "training", "collection", "v1", "v2", "v3",
+    "final", "clean", "cleaned", "processed", "raw", "full", "complete",
+    "version", "updated", "new", "latest", "original",
+}
+
+
+def _clean_title_for_embedding(title: str) -> str:
+    """Remove noise tokens from dataset title before embedding."""
+    parts = re.split(r'[-_/\s]+', title.lower())
+    cleaned = [p for p in parts if p and p not in TITLE_NOISE_TOKENS and len(p) > 1]
+    return " ".join(cleaned) if cleaned else title.lower()
+
+
+def _task_intent_bonus(query: str, tasks: List[str], ds: Dict) -> float:
+    """
+    Additive multi-task intent scoring. Zero embedding cost.
+    Returns additive points: 0.0 to ~0.25.
+    """
+    if not tasks:
+        return 0.0
+
+    query_lower = query.lower()
+    ds_text = " ".join([
+        ds.get("id", ""),
+        ds.get("description", "")[:300],
+        " ".join(ds.get("tags", []))
+    ]).lower()
+
+    bonus = 0.0
+    tasks_matched = 0
+
+    for task in tasks:
+        task_lower = task.lower()
+        intent_keys = TASK_INTENT_KEYWORDS.get(task_lower, [task_lower])
+
+        kw_matches = sum(1 for kw in intent_keys if kw in ds_text)
+
+        if task_lower in ds_text:
+            bonus += 0.05
+            tasks_matched += 1
+        elif kw_matches >= 1:
+            bonus += 0.03
+            tasks_matched += 1
+
+        if kw_matches >= 3:
+            bonus += 0.05
+        elif kw_matches >= 2:
+            bonus += 0.03
+
+    if len(tasks) > 1 and tasks_matched >= len(tasks):
+        bonus += 0.10
+    elif len(tasks) > 1 and tasks_matched >= 2:
+        bonus += 0.05
+
+    return min(bonus, 0.10)  # Capped to prevent dominating ranking
+
+
+def _source_penalty(ds: Dict) -> float:
+    """
+    Penalize non-dataset repositories intelligently.
+    Also penalize untrusted sources (not Kaggle/HuggingFace).
+    """
+    source = ds.get("source", "").lower()
+    ds_text = " ".join([
+        ds.get("id", ""),
+        ds.get("description", "")[:300],
+        " ".join(ds.get("tags", []))
+    ]).lower()
+
+    # ── GitHub: detect actual datasets ──
+    if source == "github":
+        dataset_signals = [
+            "dataset", "data files", "csv", "parquet",
+            "download", "annotations", "benchmark"
+        ]
+        code_signals = [
+            "app", "web app", "flask", "react",
+            "model", "classifier", "implementation",
+            "system", "using", "built with"
+        ]
+        has_dataset_signal = any(k in ds_text for k in dataset_signals)
+        has_code_signal = any(k in ds_text for k in code_signals)
+
+        if has_dataset_signal and not has_code_signal:
+            return 0.9   # likely dataset repo but still untrusted source
+        if has_code_signal and not has_dataset_signal:
+            return 0.6   # mostly code project
+        return 0.75  # ambiguous
+
+    # ── ArXiv: penalize unless dataset provided ──
+    if source == "arxiv":
+        if "dataset" in ds_text or "benchmark" in ds_text:
+            return 0.9
+        return 0.7
+
+    # ── OpenDataPortal: slightly less trusted ──
+    if source == "opendataportal":
+        return 0.9
+
+    # ── Kaggle & HuggingFace: fully trusted ──
+    return 1.0
+
+
+def _keyword_overlap_score(query_words: set, ds: Dict) -> float:
+    """Fast keyword overlap with sqrt normalization for long queries."""
+    ds_text = " ".join([
+        ds.get("id", ""),
+        ds.get("description", "")[:200],
+        " ".join(ds.get("tags", []))
+    ]).lower()
+    ds_words = set(re.findall(r'\w+', ds_text))
+    if not query_words or not ds_words:
+        return 0.0
+    overlap = len(query_words.intersection(ds_words))
+    return overlap / math.sqrt(len(query_words) * len(ds_words))
+
+
+def _anti_keyword_penalty(
+    ds: Dict,
+    anti_keywords: List[str],
+    constraint_terms: List[str],
+) -> float:
+    """
+    Signal-ratio based anti-keyword penalty.
+    
+    Instead of hard-dropping candidates, calculate:
+      positive_hits = count of constraint_terms found
+      negative_hits = count of anti_keywords found
+    
+    If negative_hits > positive_hits → penalty 0.75
+    If negative_hits > 0 but <= positive_hits → no penalty
+    If negative_hits == 0 → no penalty
+    """
+    if not anti_keywords:
+        return 1.0
+
+    ds_text = f"{ds.get('id','')} {ds.get('description','')} {' '.join(ds.get('tags',[]))}".lower()
+
+    positive_hits = sum(1 for term in constraint_terms if term in ds_text)
+    negative_hits = sum(1 for term in anti_keywords if term in ds_text)
+
+    if negative_hits > positive_hits:
+        return 0.75
+    return 1.0
+
+
+def _prefilter_candidates(
+    query: str,
+    candidates: List[Dict[str, Any]],
+    max_for_embedding: int = 80,
+    min_per_source: int = 12,
+) -> List[Dict[str, Any]]:
+    """
+    Fast keyword-based pre-filter (Stage 1.5).
+    
+    Uses adaptive sizing: min(80, max(40, count * 0.12))
+    """
+    # Adaptive limit based on candidate count
+    adaptive_limit = min(max_for_embedding, max(40, int(len(candidates) * 0.12)))
+    
+    if len(candidates) <= adaptive_limit:
+        return candidates
+    
+    max_for_embedding = adaptive_limit
+
+    query_words = set(re.findall(r'\w+', query.lower()))
+
+    scored = []
+    for ds in candidates:
+        kw_score = _keyword_overlap_score(query_words, ds)
+        downloads = ds.get("downloads", 0)
+        quality_boost = min(np.log1p(downloads) / np.log1p(100_000), 1.0) * 0.1
+        
+        # Fast title match bonus
+        title = ds.get("id", "").lower()
+        title_hits = sum(1 for w in query_words if w in title)
+        title_bonus = min(title_hits * 0.05, 0.15)
+        
+        # Fast tag match bonus
+        tags_text = " ".join(ds.get("tags", [])).lower()
+        tag_hits = sum(1 for w in query_words if w in tags_text)
+        tag_bonus = min(tag_hits * 0.05, 0.15)
+        
+        total = kw_score + quality_boost + title_bonus + tag_bonus
+        scored.append((total, ds))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Phase 1: Ensure minimum representation per source
+    source_buckets: Dict[str, List] = {}
+    for score, ds in scored:
+        src = ds.get("source", "unknown")
+        if src not in source_buckets:
+            source_buckets[src] = []
+        source_buckets[src].append((score, ds))
+
+    selected_ids = set()
+    selected = []
+
+    for src, bucket in source_buckets.items():
+        for score, ds in bucket[:min_per_source]:
+            ds_id = ds.get("id", "")
+            if ds_id not in selected_ids:
+                selected_ids.add(ds_id)
+                selected.append(ds)
+
+    # Phase 2: Fill remaining slots with best overall candidates
+    remaining = max_for_embedding - len(selected)
+    if remaining > 0:
+        for score, ds in scored:
+            ds_id = ds.get("id", "")
+            if ds_id not in selected_ids:
+                selected_ids.add(ds_id)
+                selected.append(ds)
+                remaining -= 1
+                if remaining <= 0:
+                    break
+
+    source_dist = {}
+    for ds in selected:
+        src = ds.get("source", "unknown")
+        source_dist[src] = source_dist.get(src, 0) + 1
+    logger.info(
+        f"Pre-filter: {len(candidates)} -> {len(selected)} candidates. "
+        f"Source distribution: {source_dist}"
+    )
+    return selected
+
+
+def _score_quality(downloads: int, likes: int) -> float:
+    """Dataset completeness and community quality signal."""
+    if downloads == 0 and likes == 0:
+        return 0.1
+    download_score = np.log1p(downloads) / np.log1p(1_000_000)
+    like_score = np.log1p(likes) / np.log1p(10_000)
+    score = (0.7 * download_score) + (0.3 * like_score)
+    return min(max(score, 0.0), 1.0)
+
+
+def _score_popularity(downloads: int, likes: int) -> float:
+    """
+    Separate Popularity Score (P_i).
+    Pure community popularity signal — distinct from Q_i (completeness)
+    and G_i (graph centrality).
+    """
+    raw = np.log1p(downloads + likes) / np.log1p(1_000_000)
+    return min(max(raw, 0.0), 1.0)
+
+
+def _score_license(license_id) -> float:
+    if not license_id:
+        return LICENSE_SCORES["unknown"]
+    if isinstance(license_id, list):
+        license_id = license_id[0] if license_id else "unknown"
+    lid = str(license_id).lower().strip()
+    return LICENSE_SCORES.get(lid, 0.2)
+
+
+def _score_freshness(last_modified: str | None) -> float:
+    if not last_modified:
+        return 0.3
+    try:
+        dt = date_parser.parse(last_modified)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff_days = (now - dt).days
+        max_days = 3650
+        if diff_days < 0:
+            return 1.0
+        return max(0.0, 1.0 - (diff_days / max_days))
+    except Exception:
+        return 0.3
+
+
+# ── Domain keyword enforcement ──────────────────────────────────────────────
+DOMAIN_REQUIRED_KEYWORDS: Dict[str, set] = {
+    "nlp":    {"text", "review", "corpus", "language", "nlp", "sentiment",
+              "comment", "document", "word", "sentence", "prompt", "instruction"},
+    "cv":     {"image", "photo", "video", "pixel", "visual", "picture",
+              "frame", "segmentation", "detection", "x-ray", "fundus"},
+    "audio":  {"audio", "speech", "sound", "voice", "music", "acoustic",
+              "waveform", "transcript"},
+    "tabular":{"csv", "table", "column", "structured", "spreadsheet",
+              "excel", "numeric", "feature"},
+}
+
+
+def _apply_hard_constraints(
+    query: str,
+    candidates: List[Dict[str, Any]],
+    tasks: List[str] | None,
+    domain: str | None,
+    anti_keywords: List[str] | None = None,
+) -> List[Dict[str, Any]]:
+    """
+    Universal constraint layer:
+    1. Dynamic constraint token gating
+    2. Anti-keyword signal ratio filtering
+    3. Domain keyword enforcement
+    """
+    query_lower = query.lower()
+
+    # ── 1. Extract High-Information Tokens ──
+    GENERIC_TERMS = {
+        "dataset", "data", "model", "training", "deep",
+        "learning", "machine", "ai", "ml",
+        "classification", "segmentation", "detection",
+        "regression", "prediction", "analysis",
+        "object", "image", "text", "audio",
+        "task", "project", "find", "search",
+    }
+
+    tokens = re.findall(r"\b[a-zA-Z\-]{3,}\b", query_lower)
+    constraint_terms = list(set(
+        t for t in tokens if t not in GENERIC_TERMS
+    ))
+
+    # ── 2. Determine If Query Is Strict ──
+    strict_query = len(constraint_terms) >= 2
+
+    if not strict_query:
+        return candidates
+
+    # ── 3. Domain keyword set ──
+    domain_kws = DOMAIN_REQUIRED_KEYWORDS.get(domain, set()) if domain else set()
+    anti_kw_lower = [ak.lower() for ak in (anti_keywords or [])]
+
+    filtered = []
+    dropped = 0
+
+    for ds in candidates:
+        ds_text = f"{ds.get('id','')} {ds.get('description','')} {' '.join(ds.get('tags',[]))}".lower()
+
+        matches = sum(1 for term in constraint_terms if term in ds_text)
+
+        if matches < 1:
+            dropped += 1
+            continue
+
+        # ── Domain keyword enforcement ──
+        if domain_kws:
+            has_domain_kw = any(kw in ds_text for kw in domain_kws)
+            if not has_domain_kw:
+                dropped += 1
+                continue
+
+        # ── Anti-keyword signal ratio check ──
+        if anti_kw_lower:
+            positive_hits = matches
+            negative_hits = sum(1 for ak in anti_kw_lower if ak in ds_text)
+            if negative_hits >= 2 and negative_hits > positive_hits:
+                dropped += 1
+                continue
+
+        filtered.append(ds)
+
+    if dropped > 0:
+        logger.info(f"Constraint gating removed {dropped} weakly/negatively/off-domain candidates.")
+
+    if not filtered:
+        logger.warning("Constraint gating removed all candidates. Falling back to original list.")
+        return candidates
+
+    return filtered
+
+
+def rank_datasets(
+    query: str,
+    dataset_candidates: List[Dict[str, Any]],
+    tasks: List[str] | None = None,
+    domain: str | None = None,
+    keyword_variants: List[str] | None = None,
+    anti_keywords: List[str] | None = None,
+    preferred_format: str | None = None,
+    top_k: int = 7
+) -> List[Dict[str, Any]]:
+    """
+    Multi-factor ranking engine with split-field embeddings + dataset intelligence.
+
+    Scoring formula:
+      R_i = (0.30*E + 0.15*T + 0.12*DT + 0.10*K + 0.08*FM
+            + 0.10*Q + 0.05*P + 0.05*G + 0.03*L + 0.02*F)
+            + intent_bonus * src_penalty * anti_keyword_penalty
+
+    Where:
+      E  = Weighted semantic similarity (0.4*title + 0.3*tags + 0.3*desc)
+      T  = Task alignment (also split-field)
+      DT = Dataset type match (from intelligence layer)
+      K  = Keyword overlap (sqrt normalized)
+      FM = Format match (from intelligence layer)
+      Q  = Quality (completeness)
+      P  = Popularity (community signal)
+      G  = Graph centrality (pure PageRank + citations)
+      L  = License openness
+      F  = Freshness
+    """
+    if not dataset_candidates:
+        return []
+
+    # ── 0. DETERMINISTIC GATING ──
+    dataset_candidates = _apply_hard_constraints(
+        query, dataset_candidates, tasks, domain, anti_keywords
+    )
+
+    # ── STAGE 1.5: Fast Pre-Filter (adaptive sizing) ──
+    filtered_candidates = _prefilter_candidates(query, dataset_candidates)
+
+    # ── 1. Semantic Similarity (E_i) — Split-Field Embeddings ──
+    query_parts = [query]
+    if domain:
+        query_parts.append(domain)
+    if tasks:
+        query_parts.append(", ".join(tasks))
+
+    enriched_query = " | ".join(query_parts)
+
+    if keyword_variants and len(keyword_variants) > 0:
+        queries_to_embed = [enriched_query] + keyword_variants[:3]
+        query_embs = get_embeddings(queries_to_embed)
+        query_emb = np.mean(query_embs, axis=0).reshape(1, -1)
+    else:
+        query_emb = get_embedding(enriched_query).reshape(1, -1)
+
+    # Build separate field texts
+    titles = []
+    descriptions = []
+    tags_list = []
+
+    for ds in filtered_candidates:
+        raw_title = ds.get("id", "")
+        titles.append(_clean_title_for_embedding(raw_title))
+
+        desc = ds.get("description", "")[:250]
+        if not desc.strip():
+            desc = raw_title
+        descriptions.append(desc)
+
+        tags = " ".join(ds.get("tags", [])[:10])
+        if not tags.strip():
+            tags = raw_title
+        tags_list.append(tags)
+
+    # Batch embed all three fields
+    title_embs = get_embeddings(titles)
+    desc_embs = get_embeddings(descriptions)
+    tags_embs = get_embeddings(tags_list)
+
+    # Weighted combination: 0.4 title + 0.3 tags + 0.3 description
+    title_sims = cosine_similarity(query_emb, title_embs)[0]
+    tags_sims = cosine_similarity(query_emb, tags_embs)[0]
+    desc_sims = cosine_similarity(query_emb, desc_embs)[0]
+
+    semantic_sims = (0.4 * title_sims) + (0.3 * tags_sims) + (0.3 * desc_sims)
+
+    # ── 2. Task Alignment (T_i) — same split-field approach ──
+    task_scores = []
+    if tasks:
+        task_query = " ".join(tasks)
+        task_query_emb = get_embedding(task_query).reshape(1, -1)
+
+        task_title_sims = cosine_similarity(task_query_emb, title_embs)[0]
+        task_tags_sims = cosine_similarity(task_query_emb, tags_embs)[0]
+        task_desc_sims = cosine_similarity(task_query_emb, desc_embs)[0]
+
+        task_sims = (0.4 * task_title_sims) + (0.3 * task_tags_sims) + (0.3 * task_desc_sims)
+        task_scores = [max(0.0, float(s)) for s in task_sims]
+    else:
+        task_scores = [0.5 for _ in filtered_candidates]
+
+    # ── 3. Graph Centrality (G_i) — pure centrality ──
+    candidate_ids = [ds["id"] for ds in filtered_candidates]
+    graph_scores = graph_service.calculate_graph_scores(candidate_ids)
+
+    # ── Keyword Overlap (K_i) ──
+    query_words = set(re.findall(r'\w+', query.lower()))
+    keyword_overlaps = [_keyword_overlap_score(query_words, ds) for ds in filtered_candidates]
+
+    # ── Extract constraint terms for anti-keyword ratio ──
+    _GENERIC = {
+        "dataset", "data", "model", "training", "deep",
+        "learning", "machine", "ai", "ml",
+        "classification", "segmentation", "detection",
+        "regression", "prediction", "analysis",
+        "object", "image", "text", "audio",
+        "task", "project", "find", "search",
+    }
+    tokens = re.findall(r"\b[a-zA-Z\-]{3,}\b", query.lower())
+    constraint_terms = list(set(t for t in tokens if t not in _GENERIC))
+
+    # ── Combine all dimensions ──
+    final_candidates = []
+    raw_scores = []
+    for i, ds in enumerate(filtered_candidates):
+        E_i = float(semantic_sims[i])
+        T_i = float(task_scores[i])
+        K_i = float(keyword_overlaps[i])
+
+        if tasks and T_i < 0.10:
+            continue
+
+        Q_i = _score_quality(ds.get("downloads", 0), ds.get("likes", 0))
+        P_i = _score_popularity(ds.get("downloads", 0), ds.get("likes", 0))
+        G_i = graph_scores.get(ds["id"], 0.0)
+        L_i = _score_license(ds.get("license", "unknown"))
+        F_i = _score_freshness(ds.get("last_modified"))
+
+        # ── Dataset Intelligence signals ──
+        DT_i = dataset_intelligence.type_match_score(ds, domain)
+        FM_i = dataset_intelligence.format_match_score(ds, preferred_format)
+
+        # Rebalanced formula with intelligence signals
+        base_score = (
+            (0.30 * E_i) +
+            (0.15 * T_i) +
+            (0.12 * DT_i) +
+            (0.10 * K_i) +
+            (0.08 * FM_i) +
+            (0.10 * Q_i) +
+            (0.05 * P_i) +
+            (0.05 * G_i) +
+            (0.03 * L_i) +
+            (0.02 * F_i)
+        )
+
+        # ── Additive task intent bonus (capped at 0.10) ──
+        intent_bonus = _task_intent_bonus(query, tasks or [], ds)
+
+        # ── Source penalty (untrusted sources penalized) ──
+        src_penalty = _source_penalty(ds)
+
+        # ── Anti-keyword signal ratio penalty ──
+        anti_penalty = _anti_keyword_penalty(ds, anti_keywords or [], constraint_terms)
+
+        final_score = (base_score + intent_bonus) * src_penalty * anti_penalty
+
+        breakdown = {
+            "semantic": E_i,
+            "keyword_overlap": K_i,
+            "task": T_i,
+            "type_match": DT_i,
+            "format_match": FM_i,
+            "quality": Q_i,
+            "popularity": P_i,
+            "graph": G_i,
+            "license": L_i,
+            "freshness": F_i,
+            "intent_bonus": intent_bonus,
+            "source_penalty": src_penalty,
+            "anti_keyword_penalty": anti_penalty,
+        }
+        ds["ranking_breakdown"] = breakdown
+        ds["raw_similarity_score"] = final_score
+
+        raw_scores.append(final_score)
+        final_candidates.append(ds)
+
+    # Normalize scores
+    if raw_scores:
+        min_score = min(raw_scores)
+        max_score = max(raw_scores)
+        for ds in final_candidates:
+            score = ds["raw_similarity_score"]
+            if max_score > min_score:
+                normalized_score = (score - min_score) / (max_score - min_score)
+            else:
+                normalized_score = 0.5
+            ds["similarity_score"] = float(normalized_score * 0.85)
+
+    ranked = sorted(final_candidates, key=lambda x: x["similarity_score"], reverse=True)
+    return ranked[:top_k]

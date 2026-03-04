@@ -1,0 +1,29 @@
+# Secrets
+.env
+.env.*
+
+# Logs
+*.log
+*.jsonl
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Version control
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+docker-compose.yml
+
+# Data (rebuild from scratch in prod)
+data/
+
+# Scripts (dev only)
+scripts/
