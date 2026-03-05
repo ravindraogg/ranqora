@@ -4,6 +4,7 @@ import hashlib
 import logging
 from typing import Dict, Any, List, Optional
 from google import genai
+from huggingface_hub import InferenceClient
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,55 @@ _cache = LLMCache(max_size=256)
 
 class LLMService:
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        self.hf_token = os.getenv("HF_TOKEN")
+        
+        self.hf_model = "Qwen/Qwen2.5-7B-Instruct:together"
+        self.hf_client = None
+        
+        if self.hf_token:
+            self.hf_client = InferenceClient(api_key=self.hf_token)
+            logger.info(f"HuggingFace LLM Service initialized with {self.hf_model}.")
 
-        if self.api_key:
+        if self.gemini_api_key:
             # Remove GOOGLE_API_KEY to avoid the "both keys set" warning
             os.environ.pop("GOOGLE_API_KEY", None)
-            self.client = genai.Client(api_key=self.api_key)
-            self.model_name = "gemini-2.5-pro"
-            self._enabled = True
+            self.gemini_client = genai.Client(api_key=self.gemini_api_key)
+            self.gemini_model = "gemini-2.0-flash"
+            self._gemini_enabled = True
             logger.info("Gemini LLM Service initialized.")
         else:
-            self._enabled = False
-            logger.warning("GEMINI_API_KEY not found. LLM features disabled.")
+            self._gemini_enabled = False
+            logger.warning("GEMINI_API_KEY not found. Gemini mode disabled.")
+
+        self._enabled = self._gemini_enabled or (self.hf_client is not None)
+
+    async def _generate_content_with_fallback(self, prompt: str) -> str:
+        """Try Gemini first, then fallback to HF Qwen."""
+        if self._gemini_enabled:
+            try:
+                # Standard generate call
+                response = self.gemini_client.models.generate_content(
+                    model=self.gemini_model,
+                    contents=prompt,
+                )
+                return response.text.strip()
+            except Exception as e:
+                logger.error(f"Gemini generation failed: {e}. Falling back to HF...")
+
+        if self.hf_client:
+            try:
+                completion = self.hf_client.chat.completions.create(
+                    model=self.hf_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=2048
+                )
+                return completion.choices[0].message.content.strip()
+            except Exception as hf_e:
+                logger.error(f"HF / Qwen generation failed: {hf_e}")
+                raise hf_e
+
+        raise Exception("No LLM service enabled (neither Gemini nor HF).")
 
     # ── UNIFIED: Parse + Plan in ONE structured call ─────────────────────────
 
@@ -89,64 +127,62 @@ class LLMService:
         prompt = f"""
 You are an autonomous AI dataset discovery agent. Given a user query, perform deep intent analysis and return a STRICT JSON response.
 
-You must analyze:
-- What ML tasks the user needs (primary AND secondary)
-- What data modality/format is implied
-- How specific or broad the query is (affects search strategy)
-- What potential risks or limitations exist in finding this data
+Your perception module must classify queries into three levels:
 
-CRITICAL: The user's query may contain typos, misspellings, or be a fragmented sentence. You must autocorrect the spelling and reconstruct the query into a logical, professionally formulated sentence before generating the plan.
+Level 1: Dataset Type (modality)
+- Options: "image", "text", "tabular", "audio", "video", "point-cloud", "multi-modal", "time-series", "unknown"
+- CRITICAL: If the query does not specify modality, set this to "unknown". Do NOT guess vision.
+
+Level 2: Dataset Role
+- Options: "benchmark", "training", "evaluation", "synthetic", "research", "general"
+- Purpose: Does the user need a standard evaluation benchmark or just general training data?
+
+Level 3: Research Goal
+- This is the core semantic objective (e.g., "robustness", "generalization", "fairness", "classification", "segmentation").
+
+You must also analyze:
+- What potential risks or limitations exist in finding this data
+- Spelling/Correction: Reconstruct the query into a logical, professionally formulated sentence.
 
 Your output must contain ALL of the following fields:
 
-1. "domain" — one of: nlp, cv, tabular, time-series, audio, multimodal, general
-2. "modality" — data type: "image", "text", "tabular", "audio", "video", "point-cloud", "multi-modal", "time-series"
-3. "primary_tasks" — list of the MAIN ML tasks (e.g. "segmentation", "classification")
-4. "secondary_tasks" — list of RELATED or IMPLIED tasks (e.g. query says "segmentation" → secondary could include "localization", "detection")
-5. "search_query" — the BEST single short phrase (2-4 keywords) to search on Kaggle/HuggingFace.
-   RULES: Keep the core DATA SUBJECT + ML TASK. Drop method names, adjectives, filler.
-6. "keyword_variants" — list of 4-6 alternative search terms for broader coverage.
-7. "semantic_context" — ONE rich sentence describing the IDEAL dataset (modality, format, labels, domain, use-case).
-8. "objective" — ONE sentence summarizing the search goal.
-9. "constraints" — object with:
-   - "required_annotations": list of annotation types needed (e.g. ["pixel-level masks", "class labels"])
+1. "domain" - one of: nlp, cv, remote_sensing, tabular, time-series, audio, multimodal, general
+2. "modality" - From Level 1.
+3. "dataset_role" - From Level 2.
+4. "research_goal" - From Level 3.
+5. "primary_tasks" - list of the MAIN ML tasks (e.g. "segmentation", "classification")
+6. "secondary_tasks" - list of RELATED or IMPLIED tasks.
+7. "search_query" - the BEST single short phrase (2-4 keywords) to search. Drop method names, adjectives, filler.
+8. "keyword_variants" - list of 4-6 alternative search terms. CRITICAL: Extract and combine keywords, do NOT just truncate the sentence. (e.g. "satellite flood dataset", "remote sensing flood segmentation", "flood detection satellite imagery" instead of "Enhancing Satellite Imagery for").
+9. "semantic_context" - ONE rich sentence describing the IDEAL dataset (modality, format, labels, domain, role).
+10. "objective" - ONE sentence summarizing the search goal.
+11. "constraints" - object with:
+   - "required_annotations": list of annotation types needed.
    - "preferred_format": e.g. "image + mask pairs", "CSV", "JSON"
    - "min_quality": "high", "medium", or "any"
-10. "uncertainty_level" — "low", "medium", or "high" — how confident the agent is about finding good results.
-11. "strategy_reasoning" — 1-2 sentences explaining the search strategy decision.
-12. "tool_priority" — ordered list of platforms: ["huggingface", "kaggle", "arxiv", "github", "opendataportal"].
-13. "tool_rationale" — brief reason for tool ordering (1 sentence).
-14. "risk_notes" — list of 1-2 potential issues (e.g. "Medical datasets may be gated", "Niche topic — expect fewer results").
-15. "corrected_query" — The user's formally autocorrected and reconstructed query.
-16. "anti_keywords" — list of 4-8 terms that are semantically adjacent to the query but indicate IRRELEVANT datasets.
-   PURPOSE: These terms will be used to penalize datasets that match them. For example, if the user wants "customer reviews", anti_keywords should include terms like "chatbot", "support ticket", "dialogue", "QA" — things that contain the word "customer" but are NOT review datasets.
-   RULES: Think about what OTHER types of datasets share keywords with the desired dataset but are fundamentally different in purpose.
+12. "uncertainty_level" - "low", "medium", or "high".
+13. "strategy_reasoning" - 1-2 sentences explaining the search strategy decision.
+14. "tool_priority" - ordered list: ["arxiv", "kaggle", "huggingface", "github", "opendataportal"].
+15. "tool_rationale" - brief reason for tool ordering (1 sentence).
+16. "risk_notes" - list of 1-2 potential issues.
+17. "corrected_query" - The user's formally corrected query.
+18. "anti_keywords" - list of 4-8 terms that indicate IRRELEVANT datasets.
 
-EXAMPLES:
-
-Query: "Explainable Multi-Task Learning for Retinal Image Segmentation and Pathology Classification"
-Output:
+EXAMPLE for query: "Improving the Accuracy and Resilience of Machine Learning Models"
 {{
-  "domain": "cv",
-  "modality": "image",
-  "primary_tasks": ["segmentation", "classification"],
-  "secondary_tasks": ["localization", "grading"],
-  "search_query": "retinal fundus segmentation",
-  "keyword_variants": ["diabetic retinopathy", "fundus photography", "optic disc segmentation", "eye disease dataset", "retinal OCT"],
-  "semantic_context": "Medical image dataset of retinal fundus photographs with pixel-level segmentation masks and multi-class disease labels.",
-  "objective": "Find retinal image datasets with both segmentation masks and disease classification labels for multi-task learning.",
-  "constraints": {{
-    "required_annotations": ["pixel-level masks", "disease class labels"],
-    "preferred_format": "image + mask pairs with CSV labels",
-    "min_quality": "high"
-  }},
-  "uncertainty_level": "medium",
-  "strategy_reasoning": "Medical imaging datasets are niche. Expanding with 5 keyword variants and prioritizing HuggingFace + Kaggle for annotated datasets.",
-  "tool_priority": ["huggingface", "kaggle", "arxiv", "github", "opendataportal"],
-  "tool_rationale": "HuggingFace has the best medical imaging datasets; Kaggle has competitions with annotations; ArXiv for benchmark references.",
-  "risk_notes": ["Medical imaging datasets may require ethics approval or gated access", "Multi-task datasets (seg + class) are rare — may need to combine separate datasets"],
-  "corrected_query": "Explainable multi-task learning for retinal image segmentation and pathology classification.",
-  "anti_keywords": ["natural image", "scene recognition", "face detection", "self-driving", "satellite", "remote sensing"]
+  "domain": "general",
+  "modality": "unknown",
+  "dataset_role": "benchmark",
+  "research_goal": "robustness evaluation",
+  "primary_tasks": ["classification", "robustness testing"],
+  "secondary_tasks": ["generalization"],
+  "search_query": "robustness benchmarks",
+  "keyword_variants": ["model resilience", "out-of-distribution evaluation", "adversarial robustness", "benchmark datasets"],
+  "semantic_context": "Evaluative benchmark datasets used for testing machine learning model resilience and robustness across various domains.",
+  "objective": "Identify standard benchmark datasets specifically designed for evaluating model robustness and resilience.",
+  "corrected_query": "Improving the accuracy and resilience of machine learning models.",
+  "tool_priority": ["arxiv", "kaggle", "huggingface", "github", "opendataportal"],
+  "tool_rationale": "Benchmarks are pioneered in research papers (ArXiv) and competitions (Kaggle)."
 }}
 
 Now analyze:
@@ -156,12 +192,7 @@ Return ONLY valid JSON (no markdown, no explanation).
 """
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-            )
-
-            text = response.text.strip()
+            text = await self._generate_content_with_fallback(prompt)
 
             # Strip markdown code fences if present
             if "```" in text:
@@ -177,9 +208,30 @@ Return ONLY valid JSON (no markdown, no explanation).
             parsed = json.loads(text)
 
             # Normalize: merge primary_tasks into tasks for backward compat
+            dataset_role = parsed.get("dataset_role", "general")
+            research_goal = parsed.get("research_goal", "")
             primary = parsed.get("primary_tasks", [])
             secondary = parsed.get("secondary_tasks", [])
-            parsed["tasks"] = primary  # backward compat with orchestrator
+            parsed["tasks"] = primary
+            
+            # ── Point 3: Domain Detection Heuristics ──
+            # Merge REMOTE_SENSING_KEYWORDS into perception explicitly
+            REMOTE_SENSING_KEYWORDS = {
+                "sentinel", "sar", "landsat", "flood", "water segmentation", "remote sensing", "satellite", "aerial",
+                "modis", "planet", "goes", "hsi", "msi", "lulc"
+            }
+            query_lower = query.lower()
+            if any(kw in query_lower for kw in REMOTE_SENSING_KEYWORDS):
+                if parsed.get("domain") in ["general", "unknown", None]:
+                    parsed["domain"] = "remote_sensing"
+                if parsed.get("modality") in ["unknown", "general", None]:
+                    parsed["modality"] = "image"
+                if not any("segmentation" in t.lower() for t in primary):
+                    primary.append("segmentation")
+                if not any("detection" in t.lower() or "segmentation" in t.lower() for t in primary) and "flood" in query_lower:
+                    primary.append("flood detection")
+                parsed["primary_tasks"] = primary
+                parsed["tasks"] = primary
 
             # Ensure all required fields with fallbacks
             if not parsed.get("search_query"):
@@ -192,6 +244,10 @@ Return ONLY valid JSON (no markdown, no explanation).
                 parsed["domain"] = "general"
             if not parsed.get("modality"):
                 parsed["modality"] = "unknown"
+            if not parsed.get("dataset_role"):
+                parsed["dataset_role"] = "general"
+            if not parsed.get("research_goal"):
+                parsed["research_goal"] = ""
             if not primary:
                 parsed["primary_tasks"] = []
             if not secondary:
@@ -236,6 +292,8 @@ Return ONLY valid JSON (no markdown, no explanation).
         return {
             "domain": "general",
             "modality": "unknown",
+            "dataset_role": "general",
+            "research_goal": "",
             "primary_tasks": [],
             "secondary_tasks": [],
             "tasks": [],
@@ -253,6 +311,66 @@ Return ONLY valid JSON (no markdown, no explanation).
         }
 
     # ── UNIFIED: Explanation + Summary for top N results ─────────────────────
+
+    async def rank_with_llm(
+        self, query: str, candidates: List[Dict[str, Any]], top_k: int = 12
+    ) -> List[Dict[str, Any]]:
+        """
+        Point 10: LLM Ranking Layer.
+        Takes the top ~40 semantic matches and uses LLM to select and rank the best top_k.
+        """
+        if not self._enabled or not candidates or len(candidates) < 3:
+            return candidates[:top_k]
+
+        # Prepare tiny summaries for the LLM
+        summaries = []
+        for i, ds in enumerate(candidates[:40]):  # Cap at 40
+            summaries.append(
+                f"{i+1}. ID={ds.get('id')} | Description={ds.get('description', '')[:200]} "
+                f"| Tags={ds.get('tags', [])[:3]}"
+            )
+
+        prompt = f"""
+You are an expert ML dataset curator. Re-rank the following datasets based on the user query.
+Query: {query}
+
+Datasets:
+{chr(10).join(summaries)}
+
+Select the TOP {top_k} BEST datasets and return their IDs in priority order.
+Return ONLY valid JSON: {{"rank_order": ["id1", "id2", ...]}}
+"""
+        try:
+            text = await self._generate_content_with_fallback(prompt)
+            if "```" in text:
+                text = text.split("```")[1].strip()
+                if text.startswith("json"):
+                    text = text[4:].strip()
+
+            json_start = text.find("{")
+            json_end = text.rfind("}") + 1
+            text = text[json_start:json_end]
+
+            result = json.loads(text)
+            rank_order = result.get("rank_order", [])
+
+            # Create a map for fast lookup
+            ds_map = {ds["id"]: ds for ds in candidates}
+            
+            ranked = []
+            for ds_id in rank_order:
+                if ds_id in ds_map:
+                    ranked.append(ds_map[ds_id])
+            
+            # Fill the rest from the original list if LLM returned fewer than top_k
+            remaining = [ds for ds in candidates if ds["id"] not in rank_order]
+            ranked.extend(remaining)
+
+            return ranked[:top_k]
+
+        except Exception as e:
+            logger.warning(f"LLM ranking failed: {e}")
+            return candidates[:top_k]
 
     async def explain_and_summarize(
         self,
@@ -317,11 +435,7 @@ Return ONLY valid JSON (no markdown) with this exact structure:
 }}
 """
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-            )
-            text = response.text.strip()
+            text = await self._generate_content_with_fallback(prompt)
             if "```" in text:
                 text = text.split("```")[1].strip()
                 if text.startswith("json"):

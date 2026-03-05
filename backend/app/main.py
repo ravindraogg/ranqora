@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import logging.config
 from collections import defaultdict
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,11 +9,26 @@ from fastapi.responses import JSONResponse
 from app.routers import project, auth
 from app.config import ALLOWED_ORIGINS, RATE_LIMIT_PER_MINUTE, IS_PRODUCTION
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-)
+# Configure logging to be visible in console even when run via Uvicorn
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+        },
+    },
+    "root": {
+        "level": "INFO",
+        "handlers": ["console"],
+    },
+})
 logger = logging.getLogger(__name__)
 
 app = FastAPI(

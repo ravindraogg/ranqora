@@ -31,6 +31,21 @@ class DatasetMetadata(BaseModel):
     tags: List[str] = []
     similarity_score: float = 0.0
     ranking_breakdown: Optional[Dict[str, float]] = None
+    
+    # ── Category & Research Metadata ──
+    dataset_category: str = "practical"  # practical | research_benchmark
+    paper_title: Optional[str] = None
+    paper_url: Optional[str] = None
+    benchmark_task: Optional[str] = None
+    year: Optional[str] = None
+    citations: Optional[int] = 0
+    paper_source: Optional[str] = None  # ieee | arxiv | semantic_scholar
+    
+    # ── Advanced Metadata (Point 4 & UI Improvements) ──
+    temporal_pairs: bool = False
+    dataset_size: Optional[str] = None
+    annotation_type: Optional[str] = None
+    recommended_models: List[str] = []
 
 
 class RetrievalPlan(BaseModel):
@@ -40,7 +55,13 @@ class RetrievalPlan(BaseModel):
 
 
 class DatasetRankingResponse(BaseModel):
-    datasets: List[DatasetMetadata]
+    # Backward compatibility
+    datasets: List[DatasetMetadata] = []
+    
+    # New categorized results
+    practical_datasets: List[DatasetMetadata] = []
+    research_benchmarks: List[DatasetMetadata] = []
+    
     plan: Optional[RetrievalPlan] = None
     source_counts: Optional[Dict[str, int]] = None
     total_candidates: int = 0

@@ -1,39 +1,58 @@
 """
 Paper-Driven Dataset Discovery Service
 ---------------------------------------
-Searches academic papers (Semantic Scholar + ArXiv) to extract
+Searches academic papers (IEEE Xplore + ArXiv + Semantic Scholar) to extract
 dataset names actually used by researchers. These names become
 extra search seeds for the retrieval orchestrator.
+
+Precedence: IEEE Xplore > ArXiv > Semantic Scholar
 
 Flow:
   Query → Paper Search → Extract Dataset Names → Return as seeds
 """
 
 import re
+import json
+import asyncio
 import logging
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
 
 import httpx
 
+from app.config import IEEE_API_KEY
+
 logger = logging.getLogger(__name__)
 
-# Semantic Scholar free API (no key needed for basic search)
+# ── Paper Search API Endpoints ──────────────────────────────────────────────
+IEEE_API_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-ARXIV_API_URL = "http://export.arxiv.org/api/query"
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
 
 # ── Dataset name extraction patterns ────────────────────────────────────────
 DATASET_PATTERNS = [
     # "evaluated on the DRIVE dataset"
-    r"(?:evaluated|tested|trained|validated|benchmarked)\s+(?:on|using|with)\s+(?:the\s+)?(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s*(?:dataset|benchmark|corpus|data)",
+    r"(?:evaluated|tested|trained|validated|benchmarked|benchmarking)\s+(?:on|using|with|via)\s+(?:the\s+)?(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s*(?:dataset|benchmark|corpus|data|set|collection)",
     # "DRIVE dataset"
-    r"(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s+(?:dataset|benchmark|corpus)",
+    r"(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s+(?:dataset|benchmark|corpus|data set|challenge)",
     # "dataset called DRIVE"
-    r"(?:dataset|benchmark|corpus)\s+(?:called|named|known\s+as)\s+(\b[A-Z][A-Za-z0-9\-_]+)",
+    r"(?:dataset|benchmark|corpus|set)\s+(?:called|named|known\s+as|referred\s+to\s+as)\s+(\b[A-Z][A-Za-z0-9\-_]+)",
     # "using CIFAR-10 and ImageNet"
-    r"(?:using|on|with)\s+(?:the\s+)?(\b[A-Z][A-Za-z0-9\-]+(?:\-\d+)?)\s+(?:and|,)",
+    r"(?:using|on|with)\s+(?:the\s+)?(\b[A-Z][A-Za-z0-9\-]+(?:\-\d+)?)\s+(?:and|,)\s+(?:[A-Z][A-Za-z0-9\-]+)",
     # "datasets: X, Y, Z"
-    r"(?:datasets?|benchmarks?)(?:\s*:|\s+include)\s+(\b[A-Z][A-Za-z0-9\-_]+(?:(?:\s*,\s*|\s+and\s+)[A-Z][A-Za-z0-9\-_]+)*)",
+    r"(?:datasets?|benchmarks?|data)(?:\s*:|\s+include|\s+consist\s+of)\s+(\b[A-Z][A-Za-z0-9\-_]+(?:(?:\s*,\s*|\s+and\s+)[A-Z][A-Za-z0-9\-_]+)*)",
+    # Acronyms in parentheses near 'dataset'
+    r"(\b[A-Z][A-Z0-9]{1,})\s*\((?:the\s+)?dataset\)",
+    # "Proposed X dataset"
+    r"(?:proposed|introduced|released|publish)\s+(?:the\s+)?(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s*(?:dataset|benchmark)",
+    # Aggressive pattern: CAPITALIZED name before "dataset/challenge"
+    r"(\b[A-Z][A-Za-z0-9\-_]+)\s+(?:dataset|challenge|benchmark|competition|benchmark dataset|evaluation set)",
+    # Pattern: "X, a large-scale dataset"
+    r"(\b[A-Z][A-Za-z0-9\-_]+)\s*,\s*(?:a|an)\s+(?:new|large|public|open|benchmark)\s*(?:-scale)?\s*dataset",
+    # solo Capitalized Name in a list of datasets
+    r"(?:datasets?|benchmarks?):?\s*(\b[A-Z][A-Za-z0-9\-_]+)(?:\s*,\s*\b[A-Z][A-Za-z0-9\-_]+)*",
+    # "evaluated on X" (aggressive)
+    r"(?:evaluated|tested|benchmarked)\s+on\s+(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,1})",
 ]
 
 # Common false positives to filter out
@@ -78,46 +97,41 @@ FALSE_POSITIVES = {
 class PaperDiscoveryService:
     """Discovers datasets referenced in academic papers."""
 
-    async def discover(self, query: str, max_papers: int = 10) -> List[str]:
+    async def discover(self, api_query: str, max_papers: int = 10) -> List[Dict[str, Any]]:
         """
-        Search papers and extract dataset names.
-        
-        Returns a list of dataset name strings to be used as search seeds.
-        Example: ["DRIVE dataset", "CHASE_DB1 dataset", "IDRiD dataset"]
+        Search papers and extract rich dataset metadata.
         """
-        papers = await self._search_papers(query, max_papers)
+        papers = await self._search_papers(api_query, max_papers)
         
         if not papers:
             logger.info("Paper discovery: no papers found, skipping.")
             return []
         
-        dataset_names = self._extract_all_dataset_names(papers)
+        discovered = self._extract_all_dataset_metadata(papers)
         
         logger.info(
-            f"Paper discovery: {len(papers)} papers → "
-            f"{len(dataset_names)} dataset seeds: {dataset_names}"
+            f"Paper discovery found {len(discovered)} dataset seeds with context."
         )
-        return dataset_names
+        return discovered[:15]  # Cap at 15 seeds
 
     async def _search_papers(self, query: str, limit: int) -> List[Dict[str, str]]:
-        """Search both Semantic Scholar AND ArXiv, merge results."""
-        # Run both in parallel for speed
-        s2_papers, arxiv_papers = await asyncio.gather(
-            self._search_semantic_scholar(query, limit),
+        """Search IEEE Xplore > ArXiv > Semantic Scholar. Merge results."""
+        # Run all three in parallel for speed
+        ieee_papers, arxiv_papers, s2_papers = await asyncio.gather(
+            self._search_ieee(query, limit),
             self._search_arxiv(query, limit),
+            self._search_semantic_scholar(query, limit),
             return_exceptions=True,
         )
         
+        # Merge with IEEE first (highest priority)
         papers = []
-        if isinstance(s2_papers, list):
-            papers.extend(s2_papers)
-        else:
-            logger.warning(f"Semantic Scholar error: {s2_papers}")
-            
-        if isinstance(arxiv_papers, list):
-            papers.extend(arxiv_papers)
-        else:
-            logger.warning(f"ArXiv error: {arxiv_papers}")
+        for source_name, result in [("IEEE", ieee_papers), ("ArXiv", arxiv_papers), ("SemanticScholar", s2_papers)]:
+            if isinstance(result, list):
+                logger.info(f"Paper discovery [{source_name}]: {len(result)} papers found.")
+                papers.extend(result)
+            else:
+                logger.warning(f"{source_name} error: {result}")
         
         # Deduplicate by title similarity
         seen_titles = set()
@@ -130,47 +144,137 @@ class PaperDiscoveryService:
         
         return unique[:limit]
 
-    async def _search_semantic_scholar(self, query: str, limit: int) -> List[Dict[str, str]]:
-        """Search Semantic Scholar free API."""
+    async def _search_ieee(self, query: str, limit: int) -> List[Dict[str, str]]:
+        """Search IEEE Xplore Metadata API (highest priority)."""
+        if not IEEE_API_KEY:
+            logger.info("IEEE API key not set, skipping IEEE Xplore search.")
+            return []
+        
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                params = {
-                    "query": f"{query} dataset benchmark",
-                    "limit": limit,
-                    "fields": "title,abstract,year,citationCount",
-                }
-                resp = await client.get(S2_SEARCH_URL, params=params)
-                if resp.status_code == 429:
-                    logger.info("Semantic Scholar rate-limited (429), will use ArXiv.")
-                    return []
+            clean_q = re.sub(r'[^a-zA-Z0-9\s]', '', query).strip()
+            search_text = f"{clean_q} dataset"
+            
+            params = {
+                "apikey": IEEE_API_KEY,
+                "querytext": search_text,
+                "max_records": min(limit, 25),  # IEEE max is 200 per call, default 25
+                "sort_field": "article_title",
+                "sort_order": "asc",
+            }
+            
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(IEEE_API_URL, params=params)
+                
                 if resp.status_code != 200:
-                    logger.warning(f"Semantic Scholar returned {resp.status_code}")
+                    logger.warning(f"IEEE API returned status {resp.status_code}")
                     return []
-
+                
                 data = resp.json()
+                articles = data.get("articles", [])
+                
                 papers = []
-                for paper in data.get("data", []):
-                    title = paper.get("title", "")
-                    abstract = paper.get("abstract", "")
+                for article in articles:
+                    title = article.get("title", "").strip()
+                    abstract = article.get("abstract", "").strip()
+                    
+                    # Get citation count from IEEE if available
+                    citing_count = article.get("citing_paper_count", 0)
+                    if isinstance(citing_count, str):
+                        try:
+                            citing_count = int(citing_count)
+                        except ValueError:
+                            citing_count = 0
+                    
+                    # Build URL
+                    article_number = article.get("article_number", "")
+                    url = f"https://ieeexplore.ieee.org/document/{article_number}" if article_number else ""
+                    
+                    # Year from publication_date or publication_year
+                    year = article.get("publication_year", "")
+                    if not year:
+                        pub_date = article.get("publication_date", "")
+                        if pub_date:
+                            year = pub_date.split(" ")[-1] if " " in pub_date else pub_date[:4]
+                    
                     if title and abstract:
                         papers.append({
                             "title": title,
                             "abstract": abstract,
-                            "citations": paper.get("citationCount", 0),
+                            "url": url,
+                            "year": str(year) if year else None,
+                            "citations": citing_count,
+                            "source": "ieee",
                         })
+                
+                logger.info(f"IEEE Xplore returned {len(papers)} papers for '{search_text[:40]}'.")
                 return papers
+                
         except Exception as e:
-            logger.warning(f"Semantic Scholar search failed: {e}")
+            logger.warning(f"IEEE Xplore search error: {e}")
+            return []
+
+    async def _search_semantic_scholar(self, query: str, limit: int) -> List[Dict[str, str]]:
+        """Search Semantic Scholar free API."""
+        try:
+            # Broaden query for better coverage
+            search_q = f"{query} dataset benchmark"
+            params = {
+                "query": search_q,
+                "limit": limit,
+                "fields": "title,abstract,url,year,citationCount"
+            }
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(S2_SEARCH_URL, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    papers = [
+                        {
+                            "title": p.get("title", ""), 
+                            "abstract": p.get("abstract", ""),
+                            "url": p.get("url"),
+                            "year": p.get("year"),
+                            "citations": p.get("citationCount", 0)
+                        } for p in data.get("data", [])
+                    ]
+                    
+                    # Fallback if 0 results
+                    if not papers and " " in query:
+                        parts = query.split()[:2]
+                        fallback_q = f"{' '.join(parts)} dataset"
+                        params["query"] = fallback_q
+                        response = await client.get(S2_SEARCH_URL, params=params)
+                        if response.status_code == 200:
+                            data = response.json()
+                            papers = [{"title": p.get("title", ""), "abstract": p.get("abstract", "")} for p in data.get("data", [])]
+                    
+                    return papers
+                elif response.status_code == 429:
+                    logger.info("Semantic Scholar rate-limited (429), will use ArXiv.")
+                    return []
+                else:
+                    logger.warning(f"Semantic Scholar returned {response.status_code}")
+                    return []
+        except Exception as e:
+            logger.warning(f"Semantic Scholar search error: {e}")
             return []
 
     async def _search_arxiv(self, query: str, limit: int) -> List[Dict[str, str]]:
         """ArXiv paper search (always runs, not just fallback)."""
         try:
-            search_query = f"all:{query} AND (abs:dataset OR abs:benchmark)"
+            # Clean query for ArXiv
+            clean_q = re.sub(r'[^a-zA-Z0-9\s]', '', query).strip()
+            
+            # Build field-specific search
+            if " " in clean_q:
+                q_parts = clean_q.split()
+                field_q = " AND ".join([f"(ti:{p} OR abs:{p})" for p in q_parts[:3]])
+                search_query = f"({field_q}) AND (abs:dataset OR ti:dataset OR abs:benchmark)"
+            else:
+                search_query = f"all:{clean_q} AND (abs:dataset OR abs:benchmark)"
+
             async with httpx.AsyncClient(timeout=15.0) as client:
                 params = {
                     "search_query": search_query,
-                    "start": 0,
                     "max_results": limit,
                     "sortBy": "relevance",
                     "sortOrder": "descending",
@@ -185,47 +289,118 @@ class PaperDiscoveryService:
                 for entry in root.findall("atom:entry", ns):
                     title = (entry.findtext("atom:title", "", ns) or "").strip().replace("\n", " ")
                     abstract = (entry.findtext("atom:summary", "", ns) or "").strip().replace("\n", " ")
+                    arxiv_id = (entry.findtext("atom:id", "", ns) or "").split("/")[-1]
+                    url = f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else ""
+                    
+                    # Try to get year from published date
+                    published = entry.findtext("atom:published", "", ns)
+                    year = published[:4] if published else None
+
                     if title and abstract:
-                        papers.append({"title": title, "abstract": abstract, "citations": 0})
+                        papers.append({
+                            "title": title, 
+                            "abstract": abstract,
+                            "url": url,
+                            "year": year,
+                            "citations": 0  # ArXiv doesn't provide citations directly
+                        })
+                
+                # Fallback if 10 results from ArXiv but 0 matches
+                if not papers and " " in clean_q:
+                    q_words = clean_q.split()[:2]
+                    fallback_q = " AND ".join([f"(ti:{w} OR abs:{w})" for w in q_words])
+                    params["search_query"] = f"({fallback_q}) AND (dataset OR benchmark)"
+                    resp = await client.get(ARXIV_API_URL, params=params)
+                    if resp.status_code == 200:
+                        root = ET.fromstring(resp.text)
+                        for entry in root.findall("atom:entry", ns):
+                            title = (entry.findtext("atom:title", "", ns) or "").strip().replace("\n", " ")
+                            abstract = (entry.findtext("atom:summary", "", ns) or "").strip().replace("\n", " ")
+                            if title and abstract:
+                                papers.append({"title": title, "abstract": abstract})
+                
                 return papers
         except Exception as e:
             logger.warning(f"ArXiv search failed: {e}")
             return []
 
-    def _extract_all_dataset_names(self, papers: List[Dict[str, str]]) -> List[str]:
-        """Extract and deduplicate dataset names from all papers."""
-        all_names = set()
+    def _extract_all_dataset_metadata(self, papers: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """Extract and analyze dataset metadata from all papers."""
+        seen_names = {}
         
         for paper in papers:
             text = f"{paper.get('title', '')} {paper.get('abstract', '')}"
-            names = self._extract_dataset_names(text)
-            all_names.update(names)
-        
-        # Filter false positives, short names, and common English words
-        filtered = []
-        for name in all_names:
-            # Skip if in blocklist
-            if name in FALSE_POSITIVES:
-                continue
-            # Skip if too short (< 3 chars) — except known acronyms
-            if len(name) < 3:
-                continue
-            # Skip common English words (all lowercase after first letter)
-            if len(name) <= 6 and name[0].isupper() and name[1:].islower():
-                # Could be a common word like "Current", "Several", etc.
-                if name.lower() in {w.lower() for w in FALSE_POSITIVES}:
+            mentions = self._extract_mentions_with_context(text)
+            
+            for name, context in mentions:
+                if name in FALSE_POSITIVES or len(name) < 3:
                     continue
-            # Skip if it looks like a generic adjective/noun
-            if name.lower() in {"large", "small", "new", "real", "raw", "full",
-                                "clean", "original", "standard", "public", "open",
-                                "complete", "entire", "whole", "custom"}:
-                continue
-            filtered.append(name)
+                
+                # Deduplicate and merge information
+                if name not in seen_names:
+                    # Basic analysis of context
+                    purpose = "research"
+                    if any(kw in context.lower() for kw in ["robustness", "resilience", "robust"]):
+                        purpose = "robustness evaluation"
+                    elif any(kw in context.lower() for kw in ["benchmark", "standard", "baseline"]):
+                        purpose = "benchmark"
+                    elif "fairness" in context.lower():
+                        purpose = "fairness evaluation"
+
+                    modality = "unknown"
+                    if any(kw in context.lower() for kw in ["image", "vision", "pixel", "cnn", "satellite", "aerial", "remote sensing", "lidar"]):
+                        modality = "image"
+                    elif any(kw in context.lower() for kw in ["text", "nlp", "corpus", "sentence", "language model"]):
+                        modality = "text"
+                    elif any(kw in context.lower() for kw in ["multimodal", "vqa", "vision-language", "audio-visual"]):
+                        modality = "multimodal"
+                    
+                    # ── Extract Size & Annotations (UI Improvement) ──
+                    ds_size = None
+                    if "images" in context.lower():
+                        size_match = re.search(r"(\d+(?:,\d+)?)\s+images", context.lower())
+                        if size_match: ds_size = f"{size_match.group(1)} images"
+                    elif "samples" in context.lower():
+                        size_match = re.search(r"(\d+(?:,\d+)?)\s+samples", context.lower())
+                        if size_match: ds_size = f"{size_match.group(1)} samples"
+
+                    ann_type = None
+                    if any(kw in context.lower() for kw in ["segmentation", "masks", "pixel-wise"]):
+                        ann_type = "Segmentation masks"
+                    elif any(kw in context.lower() for kw in ["bounding boxes", "boxes", "detection"]):
+                        ann_type = "Bounding boxes"
+                    elif "labels" in context.lower():
+                        ann_type = "Classification labels"
+
+                    seen_names[name] = {
+                        "name": name,
+                        "seed": f"{name} dataset",
+                        "purpose": purpose,
+                        "modality": modality,
+                        "context": context[:250],
+                        "paper_title": paper.get("title"),
+                        "paper_url": paper.get("url"),
+                        "paper_source": paper.get("source", "arxiv"),
+                        "year": paper.get("year"),
+                        "citations": paper.get("citations", 0),
+                        "dataset_size": ds_size,
+                        "annotation_type": ann_type
+                    }
         
-        # Append "dataset" to each name for better search results
-        seeds = [f"{name} dataset" for name in filtered]
-        
-        return seeds[:15]  # Cap at 15 seeds
+        return list(seen_names.values())
+
+    def _extract_mentions_with_context(self, text: str) -> List[tuple]:
+        """Find dataset names and return them with surrounding context."""
+        found = []
+        for pattern in DATASET_PATTERNS:
+            for match in re.finditer(pattern, text):
+                name = match.group(1).strip()
+                # Get window of context
+                start = max(0, match.start() - 60)
+                end = min(len(text), match.end() + 100)
+                context = text[start:end]
+                found.append((name, context))
+        return found
 
     @staticmethod
     def _extract_dataset_names(text: str) -> List[str]:

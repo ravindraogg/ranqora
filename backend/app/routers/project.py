@@ -109,19 +109,30 @@ async def rank_stream(context: ProjectContext, request: Request):
                 "risk_notes": llm_plan.get("risk_notes", []),
             }})
 
-            # ── STAGE 0.5: Paper-Driven Discovery (runs inside orchestrator) ──
-            yield _sse({"stage": "0.5", "text": "Discovering benchmark datasets from research papers..."})
+            # ── STAGES 0.5–1: Agent-Driven Discovery ─────────────────
+            # The DiscoveryAgent handles paper discovery, query planning,
+            # tool selection, iterative exploration, and early stopping.
+            # It emits progress events via the `emit` callback.
+            async def emit_sse(payload):
+                """Bridge: agent calls this to emit SSE events."""
+                # We can't yield from inside a callback, so we collect events
+                pass  # Events are emitted by the agent's own logging
 
-            # ── STAGE 1: Multi-source retrieval ───────────────────
-            yield _sse({"stage": 1, "text": f"Searching APIs: '{search_query}' + {len(keyword_variants)} variants..."})
+            yield _sse({"stage": 1, "text": f"Agent starting discovery: '{search_query}'..."})
             retrieval_result = await orchestrator.retrieve(
                 query=context.query,
                 domain=effective_domain,
                 tasks=effective_tasks,
                 search_query=search_query,
                 keyword_variants=keyword_variants,
+                tool_priority=tool_priority,
             )
             candidates = retrieval_result["candidates"]
+            agent_memory = retrieval_result.get("agent_memory")
+
+            # Emit agent reasoning trace to frontend
+            if agent_memory:
+                yield _sse({"agent_reasoning": agent_memory.get_summary()})
 
             # emit per-source counts so frontend can show them live
             for src, cnt in retrieval_result["source_counts"].items():
@@ -162,7 +173,7 @@ async def rank_stream(context: ProjectContext, request: Request):
 
             # ── STAGE 3: LambdaRank scoring ───────────────────────
             yield _sse({"stage": 3, "text": "Running LightGBM LambdaRank relevance scoring..."})
-            ranked = await loop.run_in_executor(
+            ranked_semantic = await loop.run_in_executor(
                 None,
                 lambda: rank_datasets(
                     query=semantic_context,
@@ -171,9 +182,54 @@ async def rank_stream(context: ProjectContext, request: Request):
                     domain=effective_domain,
                     keyword_variants=keyword_variants,
                     anti_keywords=anti_keywords,
-                    top_k=TOP_K_RESULTS,
+                    top_k=40,  # Get top 40 for LLM re-ranking
                 )
             )
+            
+            # Point 10: Deep LLM Re-Ranking (Top 40 -> Top 20)
+            yield _sse({"stage": 3.5, "text": "Performing deep agent re-ranking with Gemini..."})
+            ranked = await llm_service.rank_with_llm(
+                query=context.query,
+                candidates=ranked_semantic,
+                top_k=25  # Extract top 25 high-quality candidates
+            )
+            
+            # Apply categorization
+            all_practical = []
+            all_research = []
+            for ds in ranked:
+                if ds.get("is_paper_seed") or ds.get("paper_source") or ds.get("source", "").lower() == "arxiv":
+                    ds["dataset_category"] = "research_benchmark"
+                    all_research.append(ds)
+                else:
+                    ds["dataset_category"] = "practical"
+                    all_practical.append(ds)
+            
+            # Slice according to limits: 15 practical, 5 research (3 ieee, 1 arxiv, 1 s2)
+            practical_ranked = all_practical[:15]
+            
+            research_ranked = []
+            ieee_count, arxiv_count, s2_count = 0, 0, 0
+            remaining_research = []
+            for ds in all_research:
+                src = ds.get("paper_source", "arxiv")
+                if src == "ieee" and ieee_count < 3:
+                    research_ranked.append(ds)
+                    ieee_count += 1
+                elif src == "arxiv" and arxiv_count < 1:
+                    research_ranked.append(ds)
+                    arxiv_count += 1
+                elif src == "semantic_scholar" and s2_count < 1:
+                    research_ranked.append(ds)
+                    s2_count += 1
+                else:
+                    remaining_research.append(ds)
+            
+            # Fill up to 5 if deficient
+            while len(research_ranked) < 5 and remaining_research:
+                research_ranked.append(remaining_research.pop(0))
+                
+            ranked = practical_ranked + research_ranked
 
             # ── STAGE 4: Evaluation + Explanations (1 Gemini call) ─
             yield _sse({"stage": 4, "text": "Evaluating result quality & generating explanations..."})
@@ -200,11 +256,27 @@ async def rank_stream(context: ProjectContext, request: Request):
             )
 
             results = [DatasetMetadata(**ds).model_dump() for ds in explained]
+            
+            # Map explained metadata back to categorized lists
+            # We use ds['id'] to find the explained version
+            id_to_explained = {d['id']: d for d in results}
+            
+            practical_results = [
+                id_to_explained[d['id']] 
+                for d in practical_ranked if d['id'] in id_to_explained
+            ]
+            research_results = [
+                id_to_explained[d['id']] 
+                for d in research_ranked if d['id'] in id_to_explained
+            ]
+
             plan = RetrievalPlan(**retrieval_result["plan"]).model_dump()
 
             final_payload = {
                 "done": True,
                 "datasets": results,
+                "practical_datasets": practical_results,
+                "research_benchmarks": research_results,
                 "plan": plan,
                 "source_counts": retrieval_result["source_counts"],
                 "total_candidates": retrieval_result["total"],
@@ -214,6 +286,7 @@ async def rank_stream(context: ProjectContext, request: Request):
                     "goal_plan":  goal_plan,
                     "evaluation": evaluation,
                     "uncertainty": uncertainty,
+                    "discovery_summary": agent_memory.get_summary() if agent_memory else None,
                 },
             }
             yield _sse(final_payload)
@@ -225,6 +298,10 @@ async def rank_stream(context: ProjectContext, request: Request):
                 "final_payload": final_payload,
             })
 
+        except asyncio.CancelledError:
+            logger.info("SSE stream cancelled by client/server shutdown.")
+        except GeneratorExit:
+            pass
         except HTTPException as e:
             yield _sse({"error": e.detail, "status_code": e.status_code})
         except Exception as e:
@@ -284,21 +361,30 @@ async def rank_project_datasets(context: ProjectContext, request: Request):
         )
 
         # Step 4: Rank with Multi-Factor Engine
-        ranked = rank_datasets(
+        ranking_results = rank_datasets(
             query=llm_plan.get("corrected_query", context.query),
             dataset_candidates=candidates,
             tasks=context.tasks,
             domain=effective_domain,
             keyword_variants=llm_plan.get("keyword_variants", []),
             anti_keywords=llm_plan.get("anti_keywords", []),
+            dataset_role=llm_plan.get("dataset_role"),
+            research_goal=llm_plan.get("research_goal"),
             top_k=TOP_K_RESULTS
         )
+        ranked = ranking_results["all"]
+        practical_ranked = ranking_results["practical"]
+        research_ranked = ranking_results["research_benchmarks"]
 
         # Step 5: Format response
         results = [DatasetMetadata(**ds) for ds in ranked]
+        practical_res = [DatasetMetadata(**ds) for ds in practical_ranked]
+        research_res = [DatasetMetadata(**ds) for ds in research_ranked]
 
         return DatasetRankingResponse(
             datasets=results,
+            practical_datasets=practical_res,
+            research_benchmarks=research_res,
             plan=RetrievalPlan(**retrieval_result["plan"]),
             source_counts=retrieval_result["source_counts"],
             total_candidates=retrieval_result["total"],

@@ -31,7 +31,7 @@ class KaggleRetrievalTool(BaseRetrievalTool):
             
         return {}
 
-    async def search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    async def search(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
         auth_params = self._get_auth_params()
         if not auth_params:
             # Kaggle API requires authentication; return empty if not configured

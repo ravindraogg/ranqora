@@ -100,69 +100,99 @@ class GraphService:
                 logger.error(f"Failed to ingest query context into Neo4j: {e}")
                 raise
 
-            for cand in candidates:
-                ds_id = cand["id"]
-                source = cand["source"]
-                tags = cand.get("tags", [])
-                
-                try:
-                    if source == "arxiv":
-                        citations = cand.get("citations", cand.get("citationCount", 1))
+        # Prepare batches for UNWIND
+        papers_batch = []
+        datasets_batch = []
+        
+        for cand in candidates:
+            ds_id = cand["id"]
+            source = cand["source"]
+            tags = cand.get("tags", [])
+            
+            if source == "arxiv":
+                papers_batch.append({
+                    "id": ds_id,
+                    "url": cand.get("url", ""),
+                    "title": cand.get("description", "")[:100],
+                    "citations": cand.get("citations", cand.get("citationCount", 1)),
+                    "tags": tags
+                })
+            else:
+                datasets_batch.append({
+                    "id": ds_id,
+                    "source": source,
+                    "downloads": cand.get("downloads", 0),
+                    "likes": cand.get("likes", 0),
+                    "tags": tags
+                })
+
+        with self.driver.session() as session:
+            try:
+                # 1. Upsert Query & Tasks
+                session.run("MERGE (q:Query {text: $query_text})", query_text=query)
+                if tasks:
+                    session.run("""
+                        MATCH (q:Query {text: $query_text})
+                        UNWIND $tasks AS t_name
+                        MERGE (t:Task {name: toLower(t_name)})
+                        MERGE (q)-[:ALIGNED_TO]->(t)
+                    """, query_text=query, tasks=tasks)
+
+                # 2. Batch Paper Ingestion
+                if papers_batch:
+                    session.run("""
+                        UNWIND $batch AS p_data
+                        MERGE (p:Paper {id: p_data.id})
+                        SET p.url = p_data.url, p.title = p_data.title, p.citations = p_data.citations
+                        WITH p, p_data
+                        MATCH (q:Query {text: $query_text})
+                        MERGE (q)-[:RETRIEVED]->(p)
+                        WITH p, p_data
+                        UNWIND p_data.tags AS tag
+                        MERGE (d:Dataset {id: tag})
+                        MERGE (p)-[:CITES_DATASET]->(d)
+                    """, batch=papers_batch, query_text=query)
+
+                # 3. Batch Practical Dataset Ingestion
+                if datasets_batch:
+                    session.run("""
+                        UNWIND $batch AS d_data
+                        MERGE (d:Dataset {id: d_data.id})
+                        SET d.source = d_data.source, d.downloads = d_data.downloads, d.likes = d_data.likes
+                        WITH d, d_data
+                        MERGE (s:Source {name: d_data.source})
+                        MERGE (s)-[:HOSTS]->(d)
+                        WITH d, d_data
+                        MATCH (q:Query {text: $query_text})
+                        MERGE (q)-[:RETRIEVED]->(d)
+                        WITH d, d_data
+                        UNWIND d_data.tags AS tag
+                        MERGE (t:Task {name: toLower(tag)})
+                        MERGE (d)-[:USED_FOR]->(t)
+                        MERGE (t)-[:USES]->(d)
+                    """, batch=datasets_batch, query_text=query)
+                    
+                    # Benchmark Relationships
+                    if tasks:
                         session.run("""
-                            MERGE (p:Paper {id: $id})
-                            SET p.url = $url, p.title = $desc, p.citations = $citations
-                            WITH p
-                            MATCH (q:Query {text: $query_text})
-                            MERGE (q)-[:RETRIEVED]->(p)
-                        """, id=ds_id, url=cand.get("url", ""), desc=cand.get("description", "")[:100], citations=citations, query_text=query)
-                        
-                        if tags:
-                            session.run("""
-                                MATCH (p:Paper {id: $id})
-                                UNWIND $tags AS tag
-                                MERGE (d:Dataset {id: tag})
-                                MERGE (p)-[:CITES_DATASET]->(d)
-                            """, id=ds_id, tags=tags)
-                    else:
-                        session.run("""
-                            MERGE (d:Dataset {id: $id})
-                            SET d.source = $source, d.downloads = $downloads, d.likes = $likes
-                            WITH d
-                            MERGE (s:Source {name: $source})
-                            MERGE (s)-[:HOSTS]->(d)
-                            WITH d
-                            MATCH (q:Query {text: $query_text})
-                            MERGE (q)-[:RETRIEVED]->(d)
-                        """, id=ds_id, source=source, downloads=cand.get("downloads", 0), likes=cand.get("likes", 0), query_text=query)
-                        
-                        if tags:
-                            session.run("""
-                                MATCH (d:Dataset {id: $id})
-                                UNWIND $tags AS tag
-                                MERGE (t:Task {name: toLower(tag)})
-                                MERGE (d)-[:USED_FOR]->(t)
-                                MERGE (t)-[:USES]->(d)
-                            """, id=ds_id, tags=tags)
-                            
-                            benchmark_flags = [t for t in tags if "benchmark" in t.lower() or "dataset" in t.lower()]
-                            if (benchmark_flags or cand.get("downloads", 0) > 10000) and tasks:
-                                try:
-                                    session.run("""
-                                        MATCH (d:Dataset {id: $id})
-                                        UNWIND $tasks AS task_name
-                                        MERGE (t:Task {name: toLower(task_name)})
-                                        MERGE (d)-[:BENCHMARK_FOR]->(t)
-                                    """, id=ds_id, tasks=tasks)
-                                except Exception: pass
-                except Exception as e:
-                    logger.error(f"Failed to ingest candidate {ds_id}: {e}")
-                    raise
+                            UNWIND $batch AS d_data
+                            MATCH (d:Dataset {id: d_data.id})
+                            WHERE d_data.downloads > 5000 
+                               OR any(t in d_data.tags WHERE t CONTAINS 'benchmark' OR t CONTAINS 'dataset')
+                            UNWIND $tasks AS task_name
+                            MERGE (t:Task {name: toLower(task_name)})
+                            MERGE (d)-[:BENCHMARK_FOR]->(t)
+                        """, batch=datasets_batch, tasks=tasks)
+            except Exception as e:
+                logger.error(f"Failed to batch ingest results into Neo4j: {e}")
+                # Don't raise, graph is enrichment
 
             if sim_edges:
                 try:
                     session.run("""
                         UNWIND $edges AS edge
-                        MATCH (d1:Dataset {id: edge[0]}), (d2:Dataset {id: edge[1]})
+                        MATCH (d1:Dataset {id: edge[0]})
+                        MATCH (d2:Dataset {id: edge[1]})
                         MERGE (d1)-[:SIMILAR_TO]->(d2)
                         MERGE (d2)-[:SIMILAR_TO]->(d1)
                     """, edges=sim_edges)

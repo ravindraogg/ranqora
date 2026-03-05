@@ -19,7 +19,7 @@ EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 
 # ─── Retrieval Limits ────────────────────────────────────────────
 MAX_DATASETS_TO_FETCH = 700
-TOP_K_RESULTS = 12
+TOP_K_RESULTS = 20
 
 # ─── API Keys (loaded from env — never hardcoded) ───────────────
 # In HuggingFace Spaces: Settings → Secrets
@@ -28,6 +28,7 @@ KAGGLE_API_TOKEN = os.getenv("KAGGLE_API_TOKEN", "")
 KAGGLE_USERNAME = os.getenv("KAGGLE_USERNAME", "")
 KAGGLE_KEY = os.getenv("KAGGLE_KEY", "")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+IEEE_API_KEY = os.getenv("IEEE_API_KEY", "")
 
 # ─── Graph Database (Phase 4) ───────────────────────────────────
 # In HF Spaces: Neo4j is optional. Falls back to in-memory NetworkX.
@@ -52,6 +53,8 @@ def validate_config():
         missing.append("KAGGLE_API_TOKEN or KAGGLE_USERNAME+KAGGLE_KEY (Kaggle search disabled)")
     if not GITHUB_TOKEN:
         missing.append("GITHUB_TOKEN (GitHub rate limit: 10 req/min)")
+    if not IEEE_API_KEY:
+        missing.append("IEEE_API_KEY (IEEE Xplore paper search disabled)")
 
     if missing:
         logger.warning("Missing env vars: " + " | ".join(missing))

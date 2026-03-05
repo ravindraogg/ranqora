@@ -1,22 +1,20 @@
 """
-Dynamic Retrieval Orchestrator (Phase 3)
------------------------------------------
-Coordinates the full retrieval pipeline:
-  1. Paper discovery: extract dataset names from academic papers
-  2. Planner selects tools and limits
-  3. All selected tools run in parallel (async)
-  4. Results are collected, deduplicated (token-based), and normalized
+Dynamic Retrieval Orchestrator (Phase 3 → Agent-Driven)
+---------------------------------------------------------
+Now delegates to the DiscoveryAgent for intelligent, memory-driven
+iterative exploration instead of brute-force variant searching.
+
+The orchestrator is a thin wrapper that:
+  1. Passes context to the DiscoveryAgent
+  2. Handles deduplication of the agent's collected results
+  3. Returns the standard response format
 """
 
-import asyncio
 import re
 import logging
 from typing import List, Dict, Any
 
-from app.services.agents.planner_agent import planner
-from app.services.retrieval.tool_registry import registry
-from app.services.paper_discovery_service import paper_discovery
-
+from app.services.agents.discovery_agent import discovery_agent
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +25,8 @@ _DEDUP_NOISE = {"dataset", "data", "v1", "v2", "v3", "clean", "cleaned",
 
 class RetrievalOrchestrator:
     """
-    Orchestrates multi-source dataset retrieval.
-    Uses the PlannerAgent to decide which tools to run,
-    then executes them concurrently.
+    Orchestrates multi-source dataset retrieval via the DiscoveryAgent.
+    The agent handles planning, tool selection, and iterative exploration.
     """
 
     async def retrieve(
@@ -39,100 +36,55 @@ class RetrievalOrchestrator:
         tasks: list[str] | None = None,
         search_query: str | None = None,
         keyword_variants: list[str] | None = None,
+        tool_priority: list[str] | None = None,
+        limits: dict | None = None,
+        emit=None,
     ) -> Dict[str, Any]:
         """
-        Full retrieval pipeline.
+        Full retrieval pipeline, now driven by the DiscoveryAgent.
 
         Args:
-            query:            Full original user sentence (used for semantic ranking).
+            query:            Full original user sentence.
             search_query:     Primary short keyword phrase for API searches.
-            keyword_variants: Additional search phrases — each triggers an extra
-                              retrieval pass, results are deduplicated.
+            keyword_variants: LLM-suggested search phrases.
+            tool_priority:    Preferred tool ordering from LLM.
+            limits:           Per-tool fetch limits.
+            emit:             Optional async SSE callback.
         """
         api_query = search_query or " ".join(query.split()[:4])
         variants = list(keyword_variants or [])
 
-        # ── Step 0: Paper-Driven Dataset Discovery ────────────────────
-        try:
-            paper_seeds = await paper_discovery.discover(api_query)
-            if paper_seeds:
-                logger.info(f"Paper discovery added {len(paper_seeds)} seeds: {paper_seeds[:5]}...")
-                # Prepend paper seeds so they get searched first
-                variants = paper_seeds + variants
-        except Exception as e:
-            logger.warning(f"Paper discovery failed (non-fatal): {e}")
+        # Delegate to the Discovery Agent
+        agent_result = await discovery_agent.discover(
+            query=query,
+            domain=domain or "general",
+            tasks=tasks or [],
+            search_query=api_query,
+            keyword_variants=variants,
+            tool_priority=tool_priority,
+            limits=limits,
+            emit=emit,
+        )
 
-        # Step 1: Plan which tools to use
-        plan = planner.plan(query, domain, tasks)
-        tool_names = plan["tools"]
-        limits = plan["limits"]
+        # Deduplicate the agent's collected candidates
+        raw_candidates = agent_result["candidates"]
+        deduplicated = self._deduplicate(raw_candidates)
 
-        logger.info(f"Retrieval plan: {plan['reasoning']}")
-        logger.info(f"Primary API query: '{api_query}' | variants: {len(variants)}")
-
-        # Step 2: Execute primary query across all tools in parallel
-        tools = registry.get_tools_by_names(tool_names)
-
-        async def run_pass(term: str) -> list:
-            """Run all tools for a single search term."""
-            coros = [self._safe_search(t, term, limits.get(t.name, 10)) for t in tools]
-            tool_results = await asyncio.gather(*coros)
-            results = []
-            for tool, res in zip(tools, tool_results):
-                if isinstance(res, Exception):
-                    logger.warning(f"Tool '{tool.name}' / term '{term}' failed: {res}")
-                else:
-                    logger.info(f"Tool '{tool.name}' / '{term}': {len(res)} results")
-                    results.extend(res)
-            return results
-
-        # Primary pass
-        primary_results = await run_pass(api_query)
-
-        # Variant passes — stop based on UNIQUE candidates, not raw count
-        seen_variants = {api_query}
-        all_raw = list(primary_results)
-        for variant in variants:
-            if variant in seen_variants:
-                continue
-            seen_variants.add(variant)
-            variant_results = await run_pass(variant)
-            all_raw.extend(variant_results)
-            
-            # Smart stopping: check deduplicated count
-            unique_count = len(self._deduplicate(all_raw))
-            if unique_count >= 500:
-                logger.info(f"Stopping retrieval: {unique_count} unique candidates reached.")
-                break
-
-        # Step 3: Deduplicate and count per source
-        deduplicated = self._deduplicate(all_raw)
+        # Recalculate source counts after dedup
         source_counts: Dict[str, int] = {}
-        errors: list = []
         for ds in deduplicated:
             src = ds.get("source", "unknown")
             source_counts[src] = source_counts.get(src, 0) + 1
 
         return {
             "candidates": deduplicated,
-            "plan": plan,
+            "plan": agent_result["plan"],
             "source_counts": source_counts,
             "total": len(deduplicated),
-            "errors": errors,
+            "errors": agent_result["errors"],
+            "discovery_context": agent_result["discovery_context"],
+            "agent_memory": agent_result.get("agent_memory"),
         }
-
-
-    @staticmethod
-    async def _safe_search(tool, query: str, limit: int):
-        """Run a tool's search method and catch exceptions gracefully."""
-        try:
-            logger.info(f"Starting tool '{tool.name}' with query='{query[:50]}', limit={limit}")
-            result = await tool.search(query, limit)
-            logger.info(f"Tool '{tool.name}' completed successfully with {len(result)} results")
-            return result
-        except Exception as e:
-            logger.error(f"Tool '{tool.name}' raised exception: {type(e).__name__}: {e}")
-            return e
 
     @staticmethod
     def _token_similarity(name_a: str, name_b: str) -> float:

@@ -7,14 +7,17 @@ Uses the free arXiv Atom API — no credentials needed.
 
 import re
 import xml.etree.ElementTree as ET
+import logging
 from typing import List, Dict, Any
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 from app.services.retrieval.base_tool import BaseRetrievalTool
 
 
-ARXIV_API_URL = "http://export.arxiv.org/api/query"
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
 
 
 class ArxivRetrievalTool(BaseRetrievalTool):
@@ -29,22 +32,52 @@ class ArxivRetrievalTool(BaseRetrievalTool):
     ]
 
     async def search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        search_query = f"all:{query} AND (abs:dataset OR abs:benchmark)"
+        # Clean query: ArXiv doesn't like special characters
+        clean_q = re.sub(r'[^a-zA-Z0-9\s]', '', query).strip()
+        
+        # Build field-specific query: searching title and abstract specifically is better
+        # if the query is more than a couple of words.
+        if " " in clean_q:
+            q_parts = clean_q.split()
+            # Combine words into a more permissive OR/AND structure for ArXiv
+            field_q = " AND ".join([f"(ti:{p} OR abs:{p})" for p in q_parts[:4]])
+            search_query = f"({field_q}) AND (abs:dataset OR ti:dataset OR abs:benchmark)"
+        else:
+            search_query = f"all:{clean_q} AND (abs:dataset OR abs:benchmark)"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            params = {
-                "search_query": search_query,
-                "start": 0,
-                "max_results": limit,
-                "sortBy": "relevance",
-                "sortOrder": "descending",
-            }
-            response = await client.get(ARXIV_API_URL, params=params)
-            if response.status_code != 200:
-                return []
-            xml_content = response.text
+        logger.info(f"ArXiv tool searching with: {search_query}")
 
-        return self._parse_arxiv_response(xml_content)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                params = {
+                    "search_query": search_query,
+                    "start": 0,
+                    "max_results": limit,
+                    "sortBy": "relevance",
+                    "sortOrder": "descending",
+                }
+                response = await client.get(ARXIV_API_URL, params=params)
+                if response.status_code != 200:
+                    logger.warning(f"ArXiv API returned status {response.status_code}")
+                    return []
+                xml_content = response.text
+                
+                results = self._parse_arxiv_response(xml_content)
+                
+                # If 0 results, try a broader fallback search with just the first 2 words
+                if not results and " " in clean_q:
+                    logger.info("ArXiv fallback search (broader)")
+                    q_words = clean_q.split()[:2]
+                    fallback_q = " AND ".join([f"(ti:{w} OR abs:{w})" for w in q_words])
+                    params["search_query"] = f"({fallback_q}) AND (dataset OR benchmark)"
+                    response = await client.get(ARXIV_API_URL, params=params)
+                    if response.status_code == 200:
+                        results = self._parse_arxiv_response(response.text)
+                
+                return results
+        except Exception as e:
+            logger.error(f"ArXiv search failed: {e}")
+            return []
 
     def _parse_arxiv_response(self, xml_content: str) -> List[Dict[str, Any]]:
         """Parse the Atom XML response and extract dataset-like entries."""
@@ -90,14 +123,23 @@ class ArxivRetrievalTool(BaseRetrievalTool):
 
     @staticmethod
     def _extract_dataset_names(text: str) -> List[str]:
-        """Simple heuristic: find capitalized words near 'dataset'/'benchmark'."""
-        dataset_mentions = []
+        """Extract dataset names from paper text for tagging."""
+        mentions = set()
         patterns = [
-            r"(\b[A-Z][A-Za-z0-9\-]+(?:\s[A-Z][A-Za-z0-9\-]+)*)\s+(?:dataset|benchmark|corpus)",
-            r"(?:dataset|benchmark|corpus)\s+(?:called|named|known as)\s+(\b[A-Z][A-Za-z0-9\-]+)",
+            # "evaluated on the DRIVE dataset"
+            r"(?:evaluated|tested|trained|validated|benchmarked)\s+(?:on|using|with|via)\s+(?:the\s+)?(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s*(?:dataset|benchmark|corpus|data|set|collection)",
+            # "DRIVE dataset"
+            r"(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,2})\s+(?:dataset|benchmark|corpus|data set|challenge)",
+            # "dataset called DRIVE"
+            r"(?:dataset|benchmark|corpus|set)\s+(?:called|named|known\s+as|referred\s+to\s+as)\s+(\b[A-Z][A-Za-z0-9\-_]+)",
+            # Acronyms in parentheses
+            r"(\b[A-Z][A-Z0-9]{1,})\s*\((?:the\s+)?dataset\)",
         ]
         for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            dataset_mentions.extend(matches)
-        # Deduplicate
-        return list(set(dataset_mentions))[:5]
+            matches = re.findall(pattern, text)
+            for m in matches:
+                m = m.strip()
+                if len(m) > 1 and m[0].isupper():
+                    mentions.add(m)
+        
+        return list(mentions)[:5]

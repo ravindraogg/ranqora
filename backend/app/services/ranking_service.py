@@ -50,6 +50,14 @@ DATASET_INDICATOR_KEYWORDS = [
     "labeled", "training set", "test set", "csv", "parquet"
 ]
 
+# ── Canonical Research Benchmarks (Boosted) ──────────────────────────────────
+CANONICAL_BENCHMARKS = {
+    "imagenet", "cifar", "coco", "mnist", "glue", "superglue", "squad",
+    "kitti", "cityscapes", "pascal", "voc", "lfw", "celeba", "widerface",
+    "imdb", "yelp", "amazon-reviews", "movielens", "netflix", "wmt",
+    "lsun", "fashion-mnist", "svhn", "stl-10", "cub-200", "wilds", "imagenet-c"
+}
+
 # ── Title noise tokens to remove before embedding ───────────────────────────
 TITLE_NOISE_TOKENS = {
     "dataset", "data", "ml", "training", "collection", "v1", "v2", "v3",
@@ -153,6 +161,46 @@ def _source_penalty(ds: Dict) -> float:
 
     # ── Kaggle & HuggingFace: fully trusted ──
     return 1.0
+
+
+def _benchmark_score(ds: Dict) -> float:
+    """Boost datasets that are identified as benchmarks."""
+    score = 0.0
+    ds_id = ds.get("id", "").lower()
+    description = ds.get("description", "").lower()
+    
+    # +15 if dataset introduced in paper discovery
+    if ds.get("is_paper_seed") or ds.get("paper_context"):
+        score += 0.15
+        
+    # +20 if dataset contains "benchmark" or "standard"
+    if "benchmark" in description or "benchmark" in ds_id or "standard" in description:
+        score += 0.20
+        
+    # +40 if in canonical list
+    ds_id_clean = re.sub(r'[^a-z0-9]', '-', ds_id)
+    if any(cb in ds_id_clean for cb in CANONICAL_BENCHMARKS):
+        score += 0.40
+        
+    return min(score, 1.0)
+
+
+def _annotation_score(ds: Dict) -> float:
+    """Point 10: Annotation Quality Score.
+    Detects presence of specific annotation keywords (masks, boxes, labels).
+    """
+    score = 0.0
+    ds_text = f"{ds.get('description','')} {' '.join(ds.get('tags',[]))}".lower()
+    
+    # Remote Sensing / Image Segmentation specific
+    if any(kw in ds_text for kw in ["mask", "segmentation", "pixel-wise", "pixelwise", "labeled pixels"]):
+        score += 0.50
+    elif any(kw in ds_text for kw in ["bounding box", "bbox", "object detection"]):
+        score += 0.30
+    elif any(kw in ds_text for kw in ["labeled", "labels", "ground truth", "annotated"]):
+        score += 0.20
+        
+    return min(score, 1.0)
 
 
 def _keyword_overlap_score(query_words: set, ds: Dict) -> float:
@@ -565,17 +613,21 @@ def rank_datasets(
         L_i = _score_license(ds.get("license", "unknown"))
         F_i = _score_freshness(ds.get("last_modified"))
 
-        # ── Dataset Intelligence signals ──
-        # Captured earlier in loop
+        # ── Intelligence signals ──
         DT_i = type_penalties[i]
+        FM_i = dataset_intelligence.format_match_score(ds, preferred_format)
+        B_i = _benchmark_score(ds)
+        A_i = _annotation_score(ds)
 
-        # Rebalanced formula prioritizing semantic clusters
+        # Rebalanced formula (Point 10)
+        # 0.4*Sim + 0.15*Task + 0.10*Benchmark + 0.10*Annotation + 0.1*Graph + 0.1*Quality + 0.05*Pop
         base_score = (
-            (0.45 * E_i) +
-            (0.20 * T_i) +
-            (0.10 * K_i) +
-            (0.10 * Q_i) +
+            (0.40 * E_i) +
+            (0.15 * T_i) +
+            (0.15 * B_i) +
+            (0.10 * A_i) +
             (0.10 * G_i) +
+            (0.05 * Q_i) +
             (0.05 * P_i)
         )
 

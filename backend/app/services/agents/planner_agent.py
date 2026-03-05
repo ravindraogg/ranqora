@@ -14,20 +14,21 @@ from app.services.retrieval.tool_registry import registry
 
 # Domain-to-tool priority mapping
 # Higher-priority tools are listed first
+# User requested order: kaggle > arxiv + S2_SEARCH > huggingface > github > opendataportal
 DOMAIN_TOOL_PRIORITY: Dict[str, List[str]] = {
-    "nlp": ["huggingface", "arxiv", "kaggle", "github", "opendataportal"],
-    "cv": ["huggingface", "kaggle", "arxiv", "github", "opendataportal"],
-    "audio": ["huggingface", "arxiv", "github", "kaggle", "opendataportal"],
-    "tabular": ["kaggle", "opendataportal", "huggingface", "github", "arxiv"],
-    "time-series": ["kaggle", "opendataportal", "huggingface", "arxiv", "github"],
-    "geospatial": ["opendataportal", "kaggle", "github", "huggingface", "arxiv"],
-    "multimodal": ["huggingface", "arxiv", "github", "kaggle", "opendataportal"],
-    "ml": ["huggingface", "kaggle", "arxiv", "github", "opendataportal"],
-    "public-policy": ["opendataportal", "kaggle", "github", "huggingface", "arxiv"],
+    "nlp": ["kaggle", "arxiv", "huggingface", "github", "opendataportal"],
+    "cv": ["kaggle", "arxiv", "huggingface", "github", "opendataportal"],
+    "audio": ["kaggle", "arxiv", "huggingface", "github", "opendataportal"],
+    "tabular": ["kaggle", "arxiv", "opendataportal", "huggingface", "github"],
+    "time-series": ["kaggle", "arxiv", "opendataportal", "huggingface", "github"],
+    "geospatial": ["kaggle", "opendataportal", "github", "huggingface", "arxiv"],
+    "multimodal": ["kaggle", "arxiv", "huggingface", "github", "opendataportal"],
+    "ml": ["kaggle", "arxiv", "huggingface", "github", "opendataportal"],
+    "public-policy": ["kaggle", "opendataportal", "github", "huggingface", "arxiv"],
 }
 
 # Default priority when domain is unknown
-DEFAULT_PRIORITY = ["huggingface", "kaggle", "arxiv", "github", "opendataportal"]
+DEFAULT_PRIORITY = ["kaggle", "arxiv", "huggingface", "github", "opendataportal"]
 
 # Keywords that hint at specific sources
 SOURCE_KEYWORDS: Dict[str, List[str]] = {
@@ -101,13 +102,20 @@ class PlannerAgent:
         return [t for t in priority if t in available]
 
     def _assign_limits(self, tools: List[str]) -> Dict[str, int]:
-        """Assign per-tool fetch limits. Target: ~700 candidates total."""
+        """Assign per-tool fetch limits. Target balanced coverage with strict caps."""
+        # Source-specific strict caps as requested by USER
+        STRICT_CAPS = {
+            "huggingface": 100,
+            "kaggle": 50,
+            "arxiv": 50,
+            "github": 40,
+            "opendataportal": 40
+        }
+        
         limits = {}
-        # Balanced allocation across tools.
-        # Target: ~700 candidates total across up to 5 tools.
-        allocations = [180, 150, 150, 120, 100]  # total = 700
-        for i, tool in enumerate(tools):
-            limits[tool] = allocations[i] if i < len(allocations) else 100
+        for tool in tools:
+            # Default to 40 if not in STRICT_CAPS
+            limits[tool] = STRICT_CAPS.get(tool, 40)
         return limits
 
     def _build_reasoning(

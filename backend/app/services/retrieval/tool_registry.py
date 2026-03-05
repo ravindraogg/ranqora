@@ -26,9 +26,9 @@ class ToolRegistry:
     def _register_defaults(self):
         """Register all built-in retrieval tools."""
         default_tools = [
-            HuggingFaceRetrievalTool(),
             KaggleRetrievalTool(),
             ArxivRetrievalTool(),
+            HuggingFaceRetrievalTool(),
             GitHubRetrievalTool(),
             OpenDataPortalRetrievalTool(),
         ]
