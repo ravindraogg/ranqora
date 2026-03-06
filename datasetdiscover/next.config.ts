@@ -27,18 +27,6 @@ const nextConfig: NextConfig = {
     ];
   },
 
-  // Rewrite /api/* calls to the backend in production
-  // Override via NEXT_PUBLIC_API_URL env var at runtime
-  async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiUrl}/api/:path*`,
-      },
-    ];
-  },
-
   // Allow images from HuggingFace and other dataset sources
   images: {
     remotePatterns: [

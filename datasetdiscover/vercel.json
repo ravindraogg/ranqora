@@ -5,7 +5,7 @@
     "installCommand": "npm ci",
     "outputDirectory": ".next",
     "env": {
-        "NEXT_PUBLIC_API_URL": "https://ravindraog-backedndnfsfvf.hf.space"
+        "NEXT_PUBLIC_API_URL": "/api/proxy"
     },
     "regions": [
         "iad1"
