@@ -34,8 +34,10 @@ class RetrievalOrchestrator:
         query: str,
         domain: str | None = None,
         tasks: list[str] | None = None,
+        modality: str | None = None,
         search_query: str | None = None,
         keyword_variants: list[str] | None = None,
+        interpretations: list[str] | None = None,
         tool_priority: list[str] | None = None,
         limits: dict | None = None,
         emit=None,
@@ -45,8 +47,12 @@ class RetrievalOrchestrator:
 
         Args:
             query:            Full original user sentence.
+            domain:           Detected domain (cv, nlp, tabular).
+            tasks:            Detected tasks.
+            modality:         Detected modality (image, audio, text).
             search_query:     Primary short keyword phrase for API searches.
             keyword_variants: LLM-suggested search phrases.
+            interpretations:  LLM-suggested alternative goal hypothesis.
             tool_priority:    Preferred tool ordering from LLM.
             limits:           Per-tool fetch limits.
             emit:             Optional async SSE callback.
@@ -59,8 +65,10 @@ class RetrievalOrchestrator:
             query=query,
             domain=domain or "general",
             tasks=tasks or [],
+            modality=modality or "any",
             search_query=api_query,
             keyword_variants=variants,
+            interpretations=interpretations,
             tool_priority=tool_priority,
             limits=limits,
             emit=emit,

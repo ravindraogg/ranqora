@@ -19,11 +19,13 @@ Key behaviors:
 
 import asyncio
 import logging
+import re
 from typing import Dict, List, Any, Optional, Callable, Awaitable
 
 from app.services.agents.agent_memory import AgentMemory
 from app.services.retrieval.tool_registry import registry
 from app.services.paper_discovery_service import paper_discovery
+from app.services.agents.memory_store import memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,20 @@ DOMAIN_TOOL_MAP: Dict[str, List[str]] = {
 
 ALL_TOOLS = ["kaggle", "arxiv", "huggingface", "github", "opendataportal"]
 
+# ── Canonical High-Quality Seeds ───────────────────────────────────────────
+CANONICAL_SEEDS = {
+    "cv": {
+        "detection": ["COCO", "KITTI", "Cityscapes", "BDD100K", "Waymo Open", "PASCAL VOC"],
+        "segmentation": ["Cityscapes", "COCO", "ADE20K", "Mapillary Vistas", "DeepGlobe"],
+        "classification": ["ImageNet-1K", "CIFAR-10", "CIFAR-100", "MNIST", "Places365"],
+        "enhancement": ["REDS", "Vimeo-90K", "SIDD", "DND", "LOL dataset"]
+    },
+    "nlp": {
+        "classification": ["IMDB", "SST-2", "AG News", "MNLI"],
+        "qa": ["SQuAD", "Natural Questions", "HotpotQA"],
+        "summarization": ["CNN/DailyMail", "XSum", "BillSum"]
+    }
+}
 
 class DiscoveryAgent:
     """
@@ -56,8 +72,10 @@ class DiscoveryAgent:
         query: str,
         domain: str,
         tasks: List[str],
+        modality: str,
         search_query: str,
         keyword_variants: List[str],
+        interpretations: Optional[List[str]] = None,
         tool_priority: Optional[List[str]] = None,
         limits: Optional[Dict[str, int]] = None,
         emit: Optional[Callable[[Dict], Awaitable[None]]] = None,
@@ -87,6 +105,17 @@ class DiscoveryAgent:
             }
         """
         memory = AgentMemory(query=query, domain=domain, tasks=tasks)
+        
+        # ── Step 0: Long-Term Memory (Past Experience) ───────────────────
+        try:
+            past_hits = await memory_store.get_past_experience(query, domain)
+            if past_hits:
+                memory.log_reasoning(f"Step 0: Long-Term Memory active. Retrieved {len(past_hits)} past high-confidence results.")
+                memory.record_exploration("memory_hit", "memory", past_hits)
+            else:
+                memory.log_reasoning("Step 0: Long-Term Memory check. No relevant past experiences found.")
+        except Exception as e:
+            logger.warning(f"LTM retrieval failed (non-fatal): {e}")
 
         # ── Phase 1: Perception ──────────────────────────────────────────
         memory.log_reasoning(f"Step 1: Input analysis. Query: '{query}'. Classified into domain '{domain}' with tasks {tasks}.")
@@ -110,10 +139,28 @@ class DiscoveryAgent:
             memory.log_reasoning(f"Paper discovery failed (non-fatal): {e}")
 
         # ── Phase 3: Intelligent Query Planning ──────────────────────────
-        planned_queries = self._plan_queries(
-            search_query, keyword_variants, discovery_context, memory
+        all_targets = [search_query]
+        if interpretations:
+            all_targets = list(set([search_query] + interpretations))
+
+        planned_queries = []
+        for target in all_targets:
+            queries = self._plan_queries(target, keyword_variants, discovery_context, memory)
+            planned_queries.extend(queries)
+            
+        # Deduplicate and cap
+        seen_p = set()
+        unique_p = []
+        for q in planned_queries:
+            if q.lower() not in seen_p:
+                seen_p.add(q.lower())
+                unique_p.append(q)
+        planned_queries = unique_p[:15]
+
+        memory.log_reasoning(
+            f"Step 3: Planning. Multi-hypothesis mode active: {len(all_targets)} targets. "
+            f"Total planned queries: {len(planned_queries)}."
         )
-        memory.log_reasoning(f"Step 3: Planning. Planned {len(planned_queries)} high-value search queries (filtered from {len(keyword_variants)} variants).")
 
         # ── Phase 4: Dynamic Tool Selection ──────────────────────────────
         selected_tools = self._select_tools(domain, tool_priority)
@@ -122,8 +169,8 @@ class DiscoveryAgent:
 
         # Point 5: Normalize earlier. MAX_PER_SOURCE = 20
         default_limits = {
-            "huggingface": 20, "kaggle": 20, "arxiv": 20,
-            "github": 20, "opendataportal": 20, "ieee": 20
+            "huggingface": 30, "kaggle": 30, "arxiv": 30,
+            "github": 30, "opendataportal": 30
         }
         effective_limits = {**(limits or default_limits)}
 
@@ -132,8 +179,8 @@ class DiscoveryAgent:
             "tools": selected_tools,
             "limits": effective_limits,
             "reasoning": (
-                f"Agent selected {len(selected_tools)} tools for domain '{domain}'. "
-                f"Planned {len(planned_queries)} targeted queries. "
+                f"Agent selected {len(selected_tools)} tools for domain '{domain}' and modality '{modality}'. "
+                f"Planned {len(planned_queries)} targeted queries across {len(all_targets)} interpretations. "
                 f"Paper seeds: {len(discovery_context)}."
             ),
         }
@@ -150,8 +197,8 @@ class DiscoveryAgent:
         memory.record_exploration(search_query, "all", primary_results)
         memory.log_reasoning(f"Step 5: Initial Retrieval. Primary search found {len(primary_results)} raw results.")
 
-        # Check if we can stop early
-        if not memory.should_stop():
+        # Check if we can stop early (User requested total max 50 datasets)
+        if memory.get_unique_dataset_count() < 50 and not memory.should_stop():
             # Iteration 2: Parallel execution of planned queries
             memory.iteration_count = 2
             remaining_queries = [q for q in planned_queries if q != search_query and q not in memory.explored_queries]
@@ -176,7 +223,7 @@ class DiscoveryAgent:
                 )
 
         # Check again — may need adaptive expansion
-        if not memory.should_stop():
+        if memory.get_unique_dataset_count() < 50 and not memory.should_stop():
             # Iteration 3: Agent-driven expansion based on discoveries
             memory.iteration_count = 3
             expansions = memory.suggest_expansions()
@@ -203,8 +250,8 @@ class DiscoveryAgent:
         all_candidates = memory.get_all_candidates()
         
         # Point 4: Heuristic filter to reduce candidates to ~120
-        memory.log_reasoning(f"Step 6: Heuristic Filtering. Filtering {len(all_candidates)} candidates down to high-quality results.")
-        all_candidates = self._heuristic_filter(all_candidates, query, domain)
+        memory.log_reasoning(f"Step 6: Heuristic Filtering. Filtering {len(all_candidates)} candidates down to high-quality results (Modality: {modality}).")
+        all_candidates = self._heuristic_filter(all_candidates, query, domain, modality)
         
         # ── Phase 7: Enrich with Paper Context ───────────────────────────
         self._enrich_with_paper_context(all_candidates, discovery_context)
@@ -248,9 +295,19 @@ class DiscoveryAgent:
           3. Filter out redundant/noisy variants
           4. Cap total queries to avoid API abuse
         """
+        # 1. Always include the primary query
         planned = [primary_query]
 
-        # Paper seeds are HIGH VALUE — always include them
+        # 1.1 Inject Canonical Seeds (Fix 4: Ensure top benchmarks are included)
+        domain_seeds = CANONICAL_SEEDS.get(memory.domain, {})
+        for task in memory.tasks:
+            for seed in domain_seeds.get(task, []):
+                seed_query = f"{seed} dataset"
+                if seed_query not in planned:
+                    planned.append(seed_query)
+                    memory.log_reasoning(f"Injected canonical seed for {task}: '{seed}'")
+
+        # 2. Paper seeds are HIGH VALUE — always include them
         paper_seeds = [meta["seed"] for meta in discovery_context.values()]
         planned.extend(paper_seeds)
 
@@ -344,28 +401,54 @@ class DiscoveryAgent:
             logger.error(f"Tool '{tool.name}' raised: {type(e).__name__}: {e}")
             return e
 
-    def _heuristic_filter(self, candidates: List[Dict], query: str, domain: str) -> List[Dict]:
+    def _heuristic_filter(self, candidates: List[Dict], query: str, domain: str, modality: str = "any") -> List[Dict]:
         """
         Point 4: Heuristic filtering to reduce candidates before heavy ranking.
-        Filters based on basic keyword score and description length.
+        Filters based on basic keyword score, description length, and modality mismatch.
         """
-        if len(candidates) <= 120:
-            return candidates
-            
+        if not candidates:
+            return []
+
+        # Modality signal words for quick rejection (Fix 2 & 5)
+        NEG_SIGNALS = {
+            "image": ["audio", "speech", "waveform", "acoustic", "text corpus", "nlp task"],
+            "audio": ["image", "vision", "video", "pixel", "frame", "text corpus"],
+            "tabular": ["image", "vision", "audio", "speech", "waveform", "unstructured"]
+        }
+        bad_words = NEG_SIGNALS.get(modality, [])
+
         q_words = set(re.findall(r'\w+', query.lower()))
         scored = []
         for ds in candidates:
-            ds_text = f"{ds.get('id','')} {ds.get('description','')} {' '.join(ds.get('tags',[]))}".lower()
+            desc = (ds.get("description") or "").lower()
+            name = (ds.get("id") or "").lower()
+            tags = [t.lower() for t in ds.get("tags", [])]
+            ds_text = f"{name} {desc} {' '.join(tags)}".lower()
             ds_words = set(re.findall(r'\w+', ds_text))
             
+            # Strict Modality Filter
+            if modality != "any" and any(w in ds_text for w in bad_words):
+                # Small exception: if 'multimodal' or 'vision' or 'cv' is in tags, keep it
+                if not any(v in tags for v in ["multimodal", "vision", "cv", "image"]):
+                    continue
+
+            # Length filter: very short descriptions are usually low quality
+            if len(desc) < 40 and not ds.get("is_paper_seed"):
+                continue
+
             # Simple word overlap score
             overlap = len(q_words & ds_words)
             
             # Quality signals
-            desc_len = len(ds.get('description', ''))
-            is_labeled = 1.0 if any(kw in ds_text for kw in ["labels", "labeled", "annotations"]) else 0.5
+            desc_len = len(desc)
+            is_labeled = 1.0 if any(kw in ds_text for kw in ["labels", "labeled", "annotations", "bbox", "mask"]) else 0.5
             
             score = (overlap * 2) + (desc_len / 500) + (is_labeled * 10)
+            
+            # Boost canonical or user-requested matches
+            if any(w in name for w in q_words):
+                score += 5
+
             scored.append((score, ds))
             
         # Re-sort and take top 120

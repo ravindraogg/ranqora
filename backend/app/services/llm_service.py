@@ -56,7 +56,7 @@ class LLMService:
         self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.hf_token = os.getenv("HF_TOKEN")
         
-        self.hf_model = "Qwen/Qwen2.5-7B-Instruct:together"
+        self.hf_model = "Qwen/Qwen2.5-7B-Instruct"
         self.hf_client = None
         
         if self.hf_token:
@@ -160,13 +160,14 @@ Your output must contain ALL of the following fields:
    - "required_annotations": list of annotation types needed.
    - "preferred_format": e.g. "image + mask pairs", "CSV", "JSON"
    - "min_quality": "high", "medium", or "any"
-12. "uncertainty_level" - "low", "medium", or "high".
-13. "strategy_reasoning" - 1-2 sentences explaining the search strategy decision.
-14. "tool_priority" - ordered list: ["arxiv", "kaggle", "huggingface", "github", "opendataportal"].
-15. "tool_rationale" - brief reason for tool ordering (1 sentence).
-16. "risk_notes" - list of 1-2 potential issues.
-17. "corrected_query" - The user's formally corrected query.
-18. "anti_keywords" - list of 4-8 terms that indicate IRRELEVANT datasets.
+12. "uncertainty_level" - "low", "medium", or "high". 
+13. "interpretations" - list of 2-3 specific interpretations if uncertainty is > low (e.g. for "anomalies in data streams" -> ["network intrusion detection", "financial fraud detection"]).
+14. "strategy_reasoning" - 1-2 sentences explaining the search strategy decision.
+15. "tool_priority" - ordered list: ["arxiv", "kaggle", "huggingface", "github", "opendataportal"].
+16. "tool_rationale" - brief reason for tool ordering (1 sentence).
+17. "risk_notes" - list of 1-2 potential issues.
+18. "corrected_query" - The user's formally corrected query.
+19. "anti_keywords" - list of 4-8 terms that indicate IRRELEVANT datasets (e.g. ["tutorial", "course", "blog", "survey"]). NEVER include "benchmark" or "evaluation".
 
 EXAMPLE for query: "Improving the Accuracy and Resilience of Machine Learning Models"
 {{
@@ -206,89 +207,113 @@ Return ONLY valid JSON (no markdown, no explanation).
             text = text[json_start:json_end]
 
             parsed = json.loads(text)
-
-            # Normalize: merge primary_tasks into tasks for backward compat
-            dataset_role = parsed.get("dataset_role", "general")
-            research_goal = parsed.get("research_goal", "")
-            primary = parsed.get("primary_tasks", [])
-            secondary = parsed.get("secondary_tasks", [])
-            parsed["tasks"] = primary
-            
-            # ── Point 3: Domain Detection Heuristics ──
-            # Merge REMOTE_SENSING_KEYWORDS into perception explicitly
-            REMOTE_SENSING_KEYWORDS = {
-                "sentinel", "sar", "landsat", "flood", "water segmentation", "remote sensing", "satellite", "aerial",
-                "modis", "planet", "goes", "hsi", "msi", "lulc"
-            }
-            query_lower = query.lower()
-            if any(kw in query_lower for kw in REMOTE_SENSING_KEYWORDS):
-                if parsed.get("domain") in ["general", "unknown", None]:
-                    parsed["domain"] = "remote_sensing"
-                if parsed.get("modality") in ["unknown", "general", None]:
-                    parsed["modality"] = "image"
-                if not any("segmentation" in t.lower() for t in primary):
-                    primary.append("segmentation")
-                if not any("detection" in t.lower() or "segmentation" in t.lower() for t in primary) and "flood" in query_lower:
-                    primary.append("flood detection")
-                parsed["primary_tasks"] = primary
-                parsed["tasks"] = primary
-
-            # Ensure all required fields with fallbacks
-            if not parsed.get("search_query"):
-                parsed["search_query"] = " ".join(query.split()[:4])
-            if not parsed.get("keyword_variants"):
-                parsed["keyword_variants"] = [parsed["search_query"]]
-            if not parsed.get("semantic_context"):
-                parsed["semantic_context"] = query
-            if not parsed.get("domain"):
-                parsed["domain"] = "general"
-            if not parsed.get("modality"):
-                parsed["modality"] = "unknown"
-            if not parsed.get("dataset_role"):
-                parsed["dataset_role"] = "general"
-            if not parsed.get("research_goal"):
-                parsed["research_goal"] = ""
-            if not primary:
-                parsed["primary_tasks"] = []
-            if not secondary:
-                parsed["secondary_tasks"] = []
-            if not parsed.get("objective"):
-                parsed["objective"] = f"Find datasets relevant to: {query}"
-            if not parsed.get("tool_priority"):
-                parsed["tool_priority"] = ["huggingface", "kaggle", "arxiv", "github", "opendataportal"]
-            if not parsed.get("constraints"):
-                parsed["constraints"] = {"required_annotations": [], "preferred_format": "any", "min_quality": "any"}
-            if not parsed.get("uncertainty_level"):
-                parsed["uncertainty_level"] = "medium"
-            if not parsed.get("strategy_reasoning"):
-                parsed["strategy_reasoning"] = "Using default multi-source search strategy."
-            if not parsed.get("tool_rationale"):
-                parsed["tool_rationale"] = "Default ordering by general relevance."
-            if not parsed.get("risk_notes"):
-                parsed["risk_notes"] = []
-            if not parsed.get("corrected_query"):
-                parsed["corrected_query"] = query
-            if not parsed.get("anti_keywords"):
-                parsed["anti_keywords"] = []
-
-            logger.info(
-                f"Agent Perception → domain={parsed['domain']}, modality={parsed['modality']}, "
-                f"primary={parsed['primary_tasks']}, secondary={parsed['secondary_tasks']}, "
-                f"uncertainty={parsed['uncertainty_level']}, tools={parsed['tool_priority']}"
-            )
-
-            _cache.put("plan", query, parsed)
-            return parsed
-
         except Exception as e:
-            logger.error(f"Error in unified parse_and_plan with Gemini: {e}")
-            fallback = self._fallback_plan(query)
-            _cache.put("plan", query, fallback)
-            return fallback
+            logger.error(f"Error in unified parse_and_plan with LLM: {e}")
+            parsed = self._fallback_plan(query)
+
+        # ── Apply Post-Processing Heuristics (Always run, even for fallback) ──
+        
+        # Normalize: merge primary_tasks into tasks for backward compat
+        dataset_role = parsed.get("dataset_role", "general")
+        research_goal = parsed.get("research_goal", "")
+        primary = parsed.get("primary_tasks", [])
+        secondary = parsed.get("secondary_tasks", [])
+        parsed["tasks"] = primary
+        
+        # ── Point 3: Domain Detection Heuristics ──
+        REMOTE_SENSING_KEYWORDS = {
+            "sentinel", "sar", "landsat", "flood", "water segmentation", "remote sensing", "satellite", "aerial",
+            "modis", "planet", "goes", "hsi", "msi", "lulc"
+        }
+        query_lower = query.lower()
+        if any(kw in query_lower for kw in REMOTE_SENSING_KEYWORDS):
+            if parsed.get("domain") in ["general", "unknown", None]:
+                parsed["domain"] = "remote_sensing"
+            if parsed.get("modality") in ["unknown", "general", None]:
+                parsed["modality"] = "image"
+            if not any("segmentation" in str(t).lower() for t in primary):
+                primary.append("segmentation")
+            if not any("detection" in str(t).lower() or "segmentation" in str(t).lower() for t in primary) and "flood" in query_lower:
+                primary.append("flood detection")
+            parsed["primary_tasks"] = primary
+            parsed["tasks"] = primary
+
+        # ── Fix 1: Modality Inference for Streams ──
+        STREAM_KEYWORDS = {
+            "stream", "data stream", "real-time", "temporal", "time series", "time-series", "sequential", "sensor"
+        }
+        if any(kw in query_lower for kw in STREAM_KEYWORDS):
+            if parsed.get("modality") in ["unknown", "general", "any", None]:
+                parsed["modality"] = "time-series"
+
+        # Ensure all required fields with fallbacks
+        if not parsed.get("search_query"):
+            parsed["search_query"] = self._smart_extract_query(query)
+        if not parsed.get("keyword_variants"):
+            parsed["keyword_variants"] = [parsed["search_query"]]
+        if not parsed.get("semantic_context"):
+            parsed["semantic_context"] = query
+        if not parsed.get("domain"):
+            parsed["domain"] = "general"
+        if not parsed.get("modality"):
+            parsed["modality"] = "any"
+            
+        # ── Vague Query Support: Multi-Hypothesis Generation (Step 3) ──
+        if parsed.get("uncertainty_level") != "low" and not parsed.get("interpretations"):
+            # Simple heuristic if LLM missed it
+            parsed["interpretations"] = [parsed["search_query"]]
+        if not parsed.get("dataset_role"):
+            parsed["dataset_role"] = "general"
+        if not parsed.get("research_goal"):
+            parsed["research_goal"] = ""
+        if not primary:
+            parsed["primary_tasks"] = []
+        if not secondary:
+            parsed["secondary_tasks"] = []
+        if not parsed.get("objective"):
+            parsed["objective"] = f"Find datasets relevant to: {query[:100]}..."
+        if not parsed.get("tool_priority"):
+            parsed["tool_priority"] = ["huggingface", "kaggle", "arxiv", "github", "opendataportal"]
+        if not parsed.get("constraints"):
+            parsed["constraints"] = {"required_annotations": [], "preferred_format": "any", "min_quality": "any"}
+        if not parsed.get("uncertainty_level"):
+            parsed["uncertainty_level"] = "medium"
+        if not parsed.get("strategy_reasoning"):
+            parsed["strategy_reasoning"] = "Using default multi-source search strategy."
+        if not parsed.get("tool_rationale"):
+            parsed["tool_rationale"] = "Default ordering by general relevance."
+        if not parsed.get("risk_notes"):
+            parsed["risk_notes"] = []
+        if not parsed.get("corrected_query"):
+            parsed["corrected_query"] = query
+        if not parsed.get("anti_keywords"):
+            parsed["anti_keywords"] = []
+
+        logger.info(
+            f"Agent Perception → domain={parsed['domain']}, modality={parsed['modality']}, "
+            f"primary={parsed['primary_tasks']}, uncertainty={parsed['uncertainty_level']}"
+        )
+
+        _cache.put("plan", query, parsed)
+        return parsed
+
+    def _smart_extract_query(self, query: str) -> str:
+        """Helper to extract a reasonable search query without LLM."""
+        # Remove common filler
+        stop_words = {"the", "a", "an", "this", "project", "aims", "to", "build", "system", "that", "in", "and", "of", "for", "with"}
+        words = [w for w in re.findall(r'\w+', query.lower()) if w not in stop_words]
+        
+        # Priority keywords to keep
+        priority = {"satellite", "imagery", "flood", "detection", "segmentation", "remote", "sensing", "landsat", "sentinel"}
+        found_priority = [w for w in words if w in priority]
+        
+        if found_priority:
+            return " ".join(found_priority[:4])
+        return " ".join(words[:4])
 
     def _fallback_plan(self, query: str) -> Dict[str, Any]:
         """Deterministic fallback when LLM is disabled or fails."""
-        fallback_q = " ".join(query.split()[:4])
+        fallback_q = self._smart_extract_query(query)
         return {
             "domain": "general",
             "modality": "unknown",
@@ -300,13 +325,13 @@ Return ONLY valid JSON (no markdown, no explanation).
             "search_query": fallback_q,
             "keyword_variants": [fallback_q],
             "semantic_context": query,
-            "objective": f"Find datasets relevant to: {query}",
+            "objective": f"Find datasets relevant to: {query[:100]}...",
             "constraints": {"required_annotations": [], "preferred_format": "any", "min_quality": "any"},
             "uncertainty_level": "medium",
-            "strategy_reasoning": "Using default multi-source search strategy.",
+            "strategy_reasoning": "Using default multi-source search strategy (LLM limited).",
             "tool_priority": ["huggingface", "kaggle", "arxiv", "github", "opendataportal"],
             "tool_rationale": "Default ordering by general relevance.",
-            "risk_notes": [],
+            "risk_notes": ["LLM capacity exceeded, results may be broader."],
             "corrected_query": query,
         }
 

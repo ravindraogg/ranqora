@@ -60,6 +60,9 @@ FALSE_POSITIVES = {
     # English words that match patterns
     "We", "The", "Our", "This", "In", "For", "An", "A", "It", "Its",
     "As", "At", "By", "On", "Or", "If", "To", "Up", "So", "No",
+    "Despite", "Dataset", "Open", "Source", "Using", "Table", "Figure",
+    "Results", "Methods", "Analysis", "Proposed", "Current", "New",
+    "Public", "Experimental", "Extracted", "Used", "Given", "Base",
     "All", "Any", "Are", "But", "Can", "Did", "Do", "Get", "Got",
     "Had", "Has", "Her", "Him", "His", "How", "Its", "May", "New",
     "Now", "Old", "One", "Out", "Own", "Per", "Set", "Two", "Use",
@@ -97,7 +100,7 @@ FALSE_POSITIVES = {
 class PaperDiscoveryService:
     """Discovers datasets referenced in academic papers."""
 
-    async def discover(self, api_query: str, max_papers: int = 10) -> List[Dict[str, Any]]:
+    async def discover(self, api_query: str, max_papers: int = 50) -> List[Dict[str, Any]]:
         """
         Search papers and extract rich dataset metadata.
         """
@@ -112,7 +115,7 @@ class PaperDiscoveryService:
         logger.info(
             f"Paper discovery found {len(discovered)} dataset seeds with context."
         )
-        return discovered[:15]  # Cap at 15 seeds
+        return discovered[:30]  # Cap at 30 seeds to allow diversity from multiple tools
 
     async def _search_papers(self, query: str, limit: int) -> List[Dict[str, str]]:
         """Search IEEE Xplore > ArXiv > Semantic Scholar. Merge results."""
@@ -142,7 +145,7 @@ class PaperDiscoveryService:
                 seen_titles.add(title_key)
                 unique.append(p)
         
-        return unique[:limit]
+        return unique  # Return all unique papers from all tools (each tool already limited)
 
     async def _search_ieee(self, query: str, limit: int) -> List[Dict[str, str]]:
         """Search IEEE Xplore Metadata API (highest priority)."""
@@ -415,11 +418,11 @@ class PaperDiscoveryService:
                     parts = re.split(r"\s*,\s*|\s+and\s+", match)
                     for part in parts:
                         part = part.strip()
-                        if part and part[0].isupper() and part not in FALSE_POSITIVES:
+                        if part and len(part) > 3 and part[0].isupper() and part not in FALSE_POSITIVES:
                             mentions.add(part)
                 else:
                     match = match.strip()
-                    if match and match not in FALSE_POSITIVES:
+                    if match and len(match) > 3 and match not in FALSE_POSITIVES:
                         mentions.add(match)
         
         return list(mentions)

@@ -190,15 +190,22 @@ def _annotation_score(ds: Dict) -> float:
     Detects presence of specific annotation keywords (masks, boxes, labels).
     """
     score = 0.0
-    ds_text = f"{ds.get('description','')} {' '.join(ds.get('tags',[]))}".lower()
+    name = (ds.get("id") or "").lower()
+    desc = (ds.get("description") or "").lower()
+    tags = " ".join(ds.get("tags", [])).lower()
+    ds_text = f"{name} {desc} {tags}"
     
-    # Remote Sensing / Image Segmentation specific
-    if any(kw in ds_text for kw in ["mask", "segmentation", "pixel-wise", "pixelwise", "labeled pixels"]):
+    # Strong signals (Fix 3: Annotation awareness)
+    BBOX_KEYWORDS = ["bbox", "bounding box", "bounding-box", "yolo", "coco format", "pascal voc"]
+    MASK_KEYWORDS = ["mask", "segmentation", "pixel-level", "polygon", "pixel-wise", "pixelwise"]
+    LABEL_KEYWORDS = ["labeled", "labels", "annotations", "ground truth", "annotated"]
+    
+    if any(kw in ds_text for kw in BBOX_KEYWORDS):
         score += 0.50
-    elif any(kw in ds_text for kw in ["bounding box", "bbox", "object detection"]):
+    if any(kw in ds_text for kw in MASK_KEYWORDS):
+        score += 0.40
+    if any(kw in ds_text for kw in LABEL_KEYWORDS):
         score += 0.30
-    elif any(kw in ds_text for kw in ["labeled", "labels", "ground truth", "annotated"]):
-        score += 0.20
         
     return min(score, 1.0)
 
@@ -399,7 +406,7 @@ def _apply_hard_constraints(
     Universal constraint layer:
     1. Dynamic constraint token gating
     2. Anti-keyword signal ratio filtering
-    3. Domain keyword enforcement
+    3. Domain/Modality keyword enforcement (Aggressive - Fix 2 & 5)
     """
     query_lower = query.lower()
 
@@ -421,9 +428,6 @@ def _apply_hard_constraints(
     # ── 2. Determine If Query Is Strict ──
     strict_query = len(constraint_terms) >= 2
 
-    if not strict_query:
-        return candidates
-
     # ── 3. Domain keyword set ──
     domain_kws = DOMAIN_REQUIRED_KEYWORDS.get(domain, set()) if domain else set()
     anti_kw_lower = [ak.lower() for ak in (anti_keywords or [])]
@@ -432,24 +436,43 @@ def _apply_hard_constraints(
     dropped = 0
 
     for ds in candidates:
-        ds_text = f"{ds.get('id','')} {ds.get('description','')} {' '.join(ds.get('tags',[]))}".lower()
+        name = (ds.get("id") or "").lower()
+        desc = (ds.get("description") or "").lower()
+        tags = " ".join(ds.get("tags", [])).lower()
+        ds_text = f"{name} {desc} {tags}"
 
-        matches = sum(1 for term in constraint_terms if term in ds_text)
-
-        if matches < 1:
-            dropped += 1
-            continue
-
-        # ── Domain keyword enforcement ──
-        if domain_kws:
-            has_domain_kw = any(kw in ds_text for kw in domain_kws)
-            if not has_domain_kw:
+        # ── 1. Modality-based Cross-Domain Rejection (Aggressive) ──
+        if domain == "cv" and any(w in ds_text for w in ["audio", "speech", "waveform"]):
+            if not any(v in ds_text for v in ["vision", "image", "multimodal", "cv"]):
+                dropped += 1
+                continue
+        
+        if domain == "tabular" and any(w in ds_text for w in ["image", "vision", "audio"]):
+            if "csv" not in ds_text and "excel" not in ds_text:
                 dropped += 1
                 continue
 
-        # ── Anti-keyword signal ratio check ──
+        # ── 2. Information Token Matching (if strict) ──
+        if strict_query:
+            matches = sum(1 for term in constraint_terms if term in ds_text)
+            if matches < 1:
+                dropped += 1
+                continue
+
+        # ── 3. Domain keyword enforcement ──
+        if domain_kws:
+            has_domain_kw = any(kw in ds_text for kw in domain_kws)
+            # tabular is tricky, allow fallback if tags suggest structured data
+            if not has_domain_kw:
+                if domain == "tabular" and any(w in ds_text for w in ["dataset", "data", "csv"]):
+                    pass
+                else:
+                    dropped += 1
+                    continue
+
+        # ── 4. Anti-keyword signal ratio check ──
         if anti_kw_lower:
-            positive_hits = matches
+            positive_hits = sum(1 for term in constraint_terms if term in ds_text) if strict_query else 1
             negative_hits = sum(1 for ak in anti_kw_lower if ak in ds_text)
             if negative_hits >= 2 and negative_hits > positive_hits:
                 dropped += 1
@@ -461,8 +484,8 @@ def _apply_hard_constraints(
         logger.info(f"Constraint gating removed {dropped} weakly/negatively/off-domain candidates.")
 
     if not filtered:
-        logger.warning("Constraint gating removed all candidates. Falling back to original list.")
-        return candidates
+        logger.warning("Constraint gating removed all candidates. Falling back to top-3 to avoid empty result.")
+        return candidates[:3]
 
     return filtered
 

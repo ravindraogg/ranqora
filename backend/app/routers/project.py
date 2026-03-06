@@ -20,6 +20,7 @@ from app.services.auth_service import auth_service
 from app.services.llm_service import llm_service
 from app.services.agents.goal_planner import goal_planner
 from app.services.agents.evaluator import agent_evaluator
+from app.services.agents.memory_store import memory_store
 from app.config import TOP_K_RESULTS
 import logging
 
@@ -298,6 +299,16 @@ async def rank_stream(context: ProjectContext, request: Request):
                 "final_payload": final_payload,
             })
 
+            # ── Long-Term Memory: Save session outcome ───────────────
+            # We store the outcome (top datasets) to improve future discoveries
+            await memory_store.save_session_outcome(
+                query=context.query,
+                domain=effective_domain,
+                tasks=effective_tasks,
+                top_datasets=results,
+                confidence=evaluation.get("confidence", 0.0)
+            )
+
         except asyncio.CancelledError:
             logger.info("SSE stream cancelled by client/server shutdown.")
         except GeneratorExit:
@@ -381,6 +392,16 @@ async def rank_project_datasets(context: ProjectContext, request: Request):
         practical_res = [DatasetMetadata(**ds) for ds in practical_ranked]
         research_res = [DatasetMetadata(**ds) for ds in research_ranked]
 
+        # ── Long-Term Memory: Save session outcome ───────────────
+        import asyncio
+        asyncio.create_task(memory_store.save_session_outcome(
+            query=context.query,
+            domain=effective_domain,
+            tasks=effective_tasks,
+            top_datasets=[d.model_dump() for d in results],
+            confidence=0.7 # Default adequate for non-stream for now
+        ))
+
         return DatasetRankingResponse(
             datasets=results,
             practical_datasets=practical_res,
@@ -422,6 +443,16 @@ async def submit_feedback(feedback: FeedbackEvent, request: Request):
         event_type=feedback.event_type,
         features={"semantic": 0.5, "task": 0.5, "quality": 0.5, "license": 0.5, "freshness": 0.5, "graph": 0.1}
     )
+
+    # ── Long-Term Memory: Reinforce successful hits ─────────────
+    # This teaches the agent which datasets were actually useful for this query
+    import asyncio
+    asyncio.create_task(memory_store.record_feedback(
+        query=feedback.query,
+        dataset_id=feedback.dataset_id,
+        event_type=feedback.event_type
+    ))
+
     return {"status": "Feedback recorded", "dataset_id": feedback.dataset_id}
 
 @router.post("/train")
