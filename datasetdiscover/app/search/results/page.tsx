@@ -76,7 +76,7 @@ interface AgentPerception {
 // SESSION_KEY is just the localStorage slot name.
 // The VALUE stored at this key is always the real client_id returned by GET /api/auth/client_id
 const SESSION_KEY = 'ranqora_client_id';
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 // These labels match exactly what the backend emits — they get overwritten
 // live with the actual text sent from the server.
