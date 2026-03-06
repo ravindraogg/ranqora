@@ -49,4 +49,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
 # ── Start server ─────────────────────────────────────────────────────────────
 # HuggingFace Spaces: must listen on 0.0.0.0:7860
 # Workers=1 because embedding model is loaded per-process (shared memory)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "1", "--timeout-keep-alive"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "1", "--timeout-keep-alive","130"]
