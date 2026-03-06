@@ -43,7 +43,7 @@ class MemoryStore:
                 session.run("""
                     MERGE (q:Query {text: $query})
                     SET q.domain = $domain, q.confidence = $confidence, q.last_run = datetime()
-                """, query=query, domain=domain, confidence=confidence)
+                """, {"query": query, "domain": domain, "confidence": confidence})
 
                 # 2. Link successful datasets
                 # We only store top relevance ones to keep memory clean
@@ -55,9 +55,9 @@ class MemoryStore:
                     MERGE (d:Dataset {id: ds_data.id})
                     SET d.source = ds_data.source, d.downloads = ds_data.downloads
                     MERGE (q)-[r:SUCCESSFUL_RECO]->(d)
-                    SET r.relevance_at_time = ds_data.get('similarity_score', 0.5),
+                    SET r.relevance_at_time = coalesce(ds_data.similarity_score, 0.5),
                         r.timestamp = datetime()
-                """, query=query, datasets=top_datasets[:10])
+                """, {"query": query, "datasets": top_datasets[:10]})
 
             except Exception as e:
                 logger.error(f"Failed to save session outcome to MemoryStore: {e}")
@@ -122,7 +122,7 @@ class MemoryStore:
                         r.interactions = coalesce(r.interactions, 0) + 1
                     WITH r
                     SET r.relevance_at_time = CASE WHEN r.relevance_at_time > 1.0 THEN 1.0 ELSE r.relevance_at_time END
-                """, query=query, dataset_id=dataset_id, weight=weight)
+                """, {"query": query, "dataset_id": dataset_id, "weight": weight})
             except Exception as e:
                 logger.error(f"Failed to record memory feedback: {e}")
 

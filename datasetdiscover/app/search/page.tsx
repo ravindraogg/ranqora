@@ -100,7 +100,7 @@ export default function SearchDashboard() {
                         className="font-black tracking-tighter text-transparent bg-clip-text bg-center bg-cover lowercase leading-[0.88] drop-shadow-2xl dark:drop-shadow-none pb-4"
                         style={{
                             backgroundImage: "url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop')",
-                            fontSize: 'clamp(2.5rem, 10vw, 10rem)'
+                            fontSize: 'clamp(3.5rem, 14vw, 12rem)'
                         }}
                     >
                         search.<br />discover.

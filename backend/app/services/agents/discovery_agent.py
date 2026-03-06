@@ -17,15 +17,16 @@ Key behaviors:
   5. Expands based on discoveries (adaptive, not static)
 """
 
-import asyncio
 import logging
 import re
-from typing import Dict, List, Any, Optional, Callable, Awaitable
-
+import asyncio
+from typing import List, Dict, Any, Optional, Callable, Awaitable, Sequence, Union, Tuple, Set
 from app.services.agents.agent_memory import AgentMemory
 from app.services.retrieval.tool_registry import registry
 from app.services.paper_discovery_service import paper_discovery
 from app.services.agents.memory_store import memory_store
+from app.services.embedding_service import get_embedding
+from app.services.graph_service import graph_service
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +34,17 @@ logger = logging.getLogger(__name__)
 # ── Domain → Relevant Tool Subsets ───────────────────────────────────────────
 # An agent decides which tools matter, not the user.
 DOMAIN_TOOL_MAP: Dict[str, List[str]] = {
-    "cv": ["kaggle", "arxiv", "huggingface", "github"],
-    "nlp": ["kaggle", "arxiv", "huggingface", "github"],
+    "cv": ["kaggle", "arxiv", "huggingface"],
+    "nlp": ["kaggle", "arxiv", "huggingface"],
     "tabular": ["kaggle", "huggingface", "opendataportal"],
     "audio": ["kaggle", "huggingface", "arxiv"],
     "time-series": ["kaggle", "opendataportal", "huggingface"],
-    "geospatial": ["opendataportal", "kaggle", "huggingface", "github"],
-    "medical": ["arxiv", "huggingface", "kaggle", "github"],
-    "multimodal": ["arxiv", "huggingface", "kaggle", "github"],
+    "geospatial": ["opendataportal", "kaggle", "huggingface"],
+    "medical": ["arxiv", "huggingface", "kaggle"],
+    "multimodal": ["arxiv", "huggingface", "kaggle"],
 }
 
-ALL_TOOLS = ["kaggle", "arxiv", "huggingface", "github", "opendataportal"]
+ALL_TOOLS = ["kaggle", "arxiv", "huggingface", "opendataportal"]
 
 # ── Canonical High-Quality Seeds ───────────────────────────────────────────
 CANONICAL_SEEDS = {
@@ -79,6 +80,7 @@ class DiscoveryAgent:
         tool_priority: Optional[List[str]] = None,
         limits: Optional[Dict[str, int]] = None,
         emit: Optional[Callable[[Dict], Awaitable[None]]] = None,
+        request = None, # Fix: Track disconnection
     ) -> Dict[str, Any]:
         """
         Main agent entry point.
@@ -106,7 +108,13 @@ class DiscoveryAgent:
         """
         memory = AgentMemory(query=query, domain=domain, tasks=tasks)
         
+        async def check_abort():
+            if request and await request.is_disconnected():
+                logger.info(f"Discovery Agent: User disconnected. Aborting session for '{query[:40]}'")
+                raise asyncio.CancelledError()
+
         # ── Step 0: Long-Term Memory (Past Experience) ───────────────────
+        await check_abort()
         try:
             past_hits = await memory_store.get_past_experience(query, domain)
             if past_hits:
@@ -118,6 +126,7 @@ class DiscoveryAgent:
             logger.warning(f"LTM retrieval failed (non-fatal): {e}")
 
         # ── Phase 1: Perception ──────────────────────────────────────────
+        await check_abort()
         memory.log_reasoning(f"Step 1: Input analysis. Query: '{query}'. Classified into domain '{domain}' with tasks {tasks}.")
         memory.log_reasoning(f"Step 1.1: Intent extraction. Extracted primary search query: '{search_query}'. Analyzed {len(keyword_variants)} variants.")
 
@@ -139,6 +148,7 @@ class DiscoveryAgent:
             memory.log_reasoning(f"Paper discovery failed (non-fatal): {e}")
 
         # ── Phase 3: Intelligent Query Planning ──────────────────────────
+        await check_abort()
         all_targets = [search_query]
         if interpretations:
             all_targets = list(set([search_query] + interpretations))
@@ -155,11 +165,25 @@ class DiscoveryAgent:
             if q.lower() not in seen_p:
                 seen_p.add(q.lower())
                 unique_p.append(q)
-        planned_queries = unique_p[:15]
+        planned_queries = unique_p[:10]
+
+        # ── Phase 3.1: Embedding-Based Expansion (Fix 1) ──────────────────
+        memory.log_reasoning("Step 3.1: Embedding-based expansion starting...")
+        embedding_seeds = await self._expand_via_embeddings(search_query, memory)
+        if embedding_seeds:
+            planned_queries.extend(embedding_seeds)
+            # Re-deduplicate
+            seen_p = set()
+            unique_p = []
+            for q in planned_queries:
+                if q.lower() not in seen_p:
+                    seen_p.add(q.lower())
+                    unique_p.append(q)
+            planned_queries = unique_p[:10]
 
         memory.log_reasoning(
             f"Step 3: Planning. Multi-hypothesis mode active: {len(all_targets)} targets. "
-            f"Total planned queries: {len(planned_queries)}."
+            f"Total planned queries: {len(planned_queries)} (incl. {len(embedding_seeds)} embedding seeds)."
         )
 
         # ── Phase 4: Dynamic Tool Selection ──────────────────────────────
@@ -167,10 +191,10 @@ class DiscoveryAgent:
         tools = registry.get_tools_by_names(selected_tools)
         memory.log_reasoning(f"Step 4: Tool Selection. Activated {len(selected_tools)} discovery platforms: {[t.name for t in tools]}.")
 
-        # Point 5: Normalize earlier. MAX_PER_SOURCE = 20
+        # Point 5: Normalize earlier. MAX_PER_SOURCE = 100 (Increased per user)
         default_limits = {
-            "huggingface": 30, "kaggle": 30, "arxiv": 30,
-            "github": 30, "opendataportal": 30
+            "huggingface": 70, "kaggle": 70, "arxiv": 50,
+            "opendataportal": 70
         }
         effective_limits = {**(limits or default_limits)}
 
@@ -197,8 +221,9 @@ class DiscoveryAgent:
         memory.record_exploration(search_query, "all", primary_results)
         memory.log_reasoning(f"Step 5: Initial Retrieval. Primary search found {len(primary_results)} raw results.")
 
-        # Check if we can stop early (User requested total max 50 datasets)
-        if memory.get_unique_dataset_count() < 50 and not memory.should_stop():
+        # Check if we can stop early (User requested higher total max)
+        await check_abort()
+        if memory.get_unique_dataset_count() < 100 and not memory.should_stop():
             # Iteration 2: Parallel execution of planned queries
             memory.iteration_count = 2
             remaining_queries = [q for q in planned_queries if q != search_query and q not in memory.explored_queries]
@@ -223,6 +248,7 @@ class DiscoveryAgent:
                 )
 
         # Check again — may need adaptive expansion
+        await check_abort()
         if memory.get_unique_dataset_count() < 50 and not memory.should_stop():
             # Iteration 3: Agent-driven expansion based on discoveries
             memory.iteration_count = 3
@@ -247,13 +273,26 @@ class DiscoveryAgent:
                 memory.log_reasoning("No expansion suggestions — agent is satisfied with coverage.")
 
         # ── Phase 6: Heuristic Filtering (Point 4) ───────────────────────
+        await check_abort()
         all_candidates = memory.get_all_candidates()
         
+        # Phase 6.1: Injection & Deduplication (Fix 3)
+        memory.log_reasoning(f"Step 6.1: Injecting {len(discovery_context)} paper seeds into candidates...")
+        self._inject_paper_benchmarks(all_candidates, discovery_context)
+        
+        memory.log_reasoning(f"Step 6.2: Deduplicating {len(all_candidates)} candidates across platforms...")
+        all_candidates = self._deduplicate_candidates(all_candidates)
+
         # Point 4: Heuristic filter to reduce candidates to ~120
-        memory.log_reasoning(f"Step 6: Heuristic Filtering. Filtering {len(all_candidates)} candidates down to high-quality results (Modality: {modality}).")
+        memory.log_reasoning(f"Step 6.2: Heuristic Filtering. Filtering {len(all_candidates)} candidates down to high-quality results.")
         all_candidates = self._heuristic_filter(all_candidates, query, domain, modality)
         
+        # Phase 6.3: Dataset Integrity Check (Fix 10)
+        memory.log_reasoning("Step 6.3: Dataset Integrity Check (modality, size, annotations)...")
+        all_candidates = self._dataset_integrity_check(all_candidates, modality, tasks)
+
         # ── Phase 7: Enrich with Paper Context ───────────────────────────
+        await check_abort()
         self._enrich_with_paper_context(all_candidates, discovery_context)
 
         # ── Phase 7: Compile Source Counts ────────────────────────────────
@@ -330,6 +369,27 @@ class DiscoveryAgent:
 
             planned.append(variant)
 
+        # Fix 8: Constant Dataset-Specific Expansions
+        dataset_expansions = [
+            f"{primary_query} dataset",
+            f"{primary_query} benchmark",
+            f"{primary_query} corpus"
+        ]
+        for q in dataset_expansions:
+            if q not in planned:
+                planned.append(q)
+
+        # Vague query fallback expansion (Fix 5)
+        if len(planned) < 7: # Increased threshold for fallback
+            vague_expansions = [
+                f"{primary_query} training data",
+                f"{primary_query} open dataset",
+                f"{primary_query} collection"
+            ]
+            for q in vague_expansions:
+                if q not in planned:
+                    planned.append(q)
+
         # Deduplicate and cap
         seen = set()
         unique_planned = []
@@ -340,11 +400,9 @@ class DiscoveryAgent:
                 unique_planned.append(q)
 
         memory.log_reasoning(
-            f"Query plan: {len(unique_planned)} queries from "
-            f"{len(paper_seeds)} paper seeds + {len(variants)} LLM variants. "
-            f"Filtered out {len(variants) - (len(unique_planned) - len(paper_seeds) - 1)} redundant queries."
+            f"Query plan finalized: {len(unique_planned)} queries. "
+            f"(ArXiv seeds: {len(paper_seeds)}, LLM variants: {len(variants)}, Vague Fallback: {len(planned) < 9})"
         )
-
         return unique_planned[:12]  # Hard cap at 12 search queries
 
     def _select_tools(
@@ -376,15 +434,28 @@ class DiscoveryAgent:
         errors: List[Dict],
     ) -> List[Dict]:
         """Run all selected tools for a single query in parallel."""
-        coros = [
-            self._safe_search(tool, query, limits.get(tool.name, 10))
-            for tool in tools
-        ]
-        tool_results = await asyncio.gather(*coros)
+        # Fix 5: Adaptive Timeouts (8s for intensive sources, 5s for others)
+        coros = []
+        for tool in tools:
+            # Fix: Increased ArXiv timeout to 8s per user, shared with Kaggle/HF
+            to_val = 8.0 if tool.name in ["kaggle", "huggingface", "arxiv"] else 5.0
+            coros.append(
+                asyncio.wait_for(
+                    self._safe_search(tool, query, limits.get(tool.name, 10)),
+                    timeout=to_val
+                )
+            )
+        
+        # Use return_exceptions=True to not fail the whole batch if one times out
+        tool_results = await asyncio.gather(*coros, return_exceptions=True)
 
         all_results = []
         for tool, res in zip(tools, tool_results):
-            if isinstance(res, Exception):
+            if isinstance(res, asyncio.TimeoutError):
+                safe_to = 8.0 if tool.name in ["kaggle", "huggingface"] else 5.0
+                logger.warning(f"Tool '{tool.name}' / '{query[:40]}' timed out ({safe_to}s).")
+                errors.append({"tool": tool.name, "query": query[:50], "error": "timeout"})
+            elif isinstance(res, Exception):
                 logger.warning(f"Tool '{tool.name}' / '{query[:40]}' failed: {res}")
                 errors.append({"tool": tool.name, "query": query[:50], "error": str(res)})
             elif res:
@@ -400,6 +471,131 @@ class DiscoveryAgent:
         except Exception as e:
             logger.error(f"Tool '{tool.name}' raised: {type(e).__name__}: {e}")
             return e
+
+    async def _expand_via_embeddings(self, query: str, memory: AgentMemory) -> List[str]:
+        """
+        Fix 1: Add Embedding-Based Query Expansion.
+        Vector search -> nearest neighbors -> extract keywords.
+        """
+        try:
+            # 1. Embed query
+            emb = get_embedding(query)
+            
+            # 2. Vector search in graph (Fix 1 logic)
+            neighbors = graph_service.vector_search(emb.tolist(), top_k=20)
+            if not neighbors:
+                return []
+            
+            # 3. Extract keywords/names from neighbors
+            new_queries = []
+            for n in neighbors:
+                name = n.get("id", "")
+                if name and len(name) > 3:
+                    # Clean dataset name for search
+                    clean_name = re.sub(r'[^a-zA-Z0-9\s]', ' ', name).strip()
+                    if clean_name and clean_name not in new_queries:
+                        new_queries.append(f"{clean_name} dataset")
+            
+            memory.log_reasoning(f"Embedding expansion found {len(new_queries)} semantic neighbors for seeds.")
+            return new_queries[:5]  # Take top 5 unique neighbor seeds
+        except Exception as e:
+            logger.warning(f"Embedding expansion failed: {e}")
+            return []
+
+    def _deduplicate_candidates(self, candidates: List[Dict]) -> List[Dict]:
+        """
+        Fix 3: Add Dataset Deduplication.
+        Uses fingerprint = normalize(name + description).
+        Groups and merges metadata.
+        """
+        if not candidates:
+            return []
+            
+        unique_map: Dict[str, Dict] = {}
+        
+        for ds in candidates:
+            # Create a fingerprint: normalize name and a snippet of description
+            name = (ds.get("id") or "").lower()
+            desc = (ds.get("description") or "")[:100].lower()
+            # Remove noise like 'dataset', 'data'
+            norm_id = re.sub(r'[^a-z0-9]', '', name)
+            norm_desc = re.sub(r'[^a-z0-9]', '', desc)
+            
+            fingerprint = f"{norm_id}_{norm_desc[:30]}"
+            # Also check for partial ID match if names are long
+            id_prefix = norm_id[:12]
+            
+            # Check if this fingerprint or the ID prefix is already known
+            match_found = False
+            for existing_fp, existing_ds in unique_map.items():
+                existing_norm_id = re.sub(r'[^a-z0-9]', '', existing_ds.get("id", "").lower())
+                # If IDs are very similar OR fingerprint matches
+                if (norm_id in existing_norm_id or existing_norm_id in norm_id) and (len(norm_id) > 5):
+                    match_found = True
+                    fingerprint = existing_fp
+                    break
+                if fingerprint == existing_fp:
+                    match_found = True
+                    break
+
+            if match_found:
+                # Merge: take highest downloads, cumulative tags
+                existing = unique_map[fingerprint]
+                existing["downloads"] = max(existing.get("downloads", 0), ds.get("downloads", 0))
+                existing["likes"] = max(existing.get("likes", 0), ds.get("likes", 0))
+                existing["tags"] = list(set(existing.get("tags", []) + ds.get("tags", [])))
+                # Keep original source but note secondary ones
+                if "other_sources" not in existing:
+                    existing["other_sources"] = []
+                if ds["source"] != existing["source"]:
+                    existing["other_sources"].append(ds["source"])
+            else:
+                unique_map[fingerprint] = dict(ds)
+                
+        return list(unique_map.values())
+
+    def _dataset_integrity_check(self, candidates: List[Dict], modality: str, tasks: List[str]) -> List[Dict]:
+        """
+        Fix 10: Final Dataset Integrity Check.
+        Validates: modality, minimum size, and annotation presence.
+        """
+        if not candidates:
+            return []
+            
+        checked = []
+        for ds in candidates:
+            desc = (ds.get("description") or "").lower()
+            name = (ds.get("id") or "").lower()
+            tags = [t.lower() for t in ds.get("tags", [])]
+            text = f"{name} {desc} {' '.join(tags)}"
+            
+            # Rule 1: Dataset Size Validation (Fix 4)
+            # Some platforms provide downloads/likes, but 'size' is often in description
+            # If we see "10 samples" or "5 images", reject.
+            small_match = re.search(r"(\d+)\s+(samples?|images?|files?|sentences?)", desc)
+            if small_match:
+                count = int(small_match.group(1))
+                if count < 100: # Fix 4: minimum_samples >= 100
+                    continue
+            
+            # Rule 2: Modality Integrity (Fix 10)
+            # If modality is audio, ensure audio keywords exist.
+            if modality == "audio" and not any(w in text for w in ["audio", "speech", "voice", "sound", "wav", "mp3", "asr", "spoken", "digit", "recognition"]):
+                continue
+            if modality == "image" and not any(w in text for w in ["image", "vision", "picture", "photo", "jpg", "png", "pixel"]):
+                continue
+            
+            # Rule 3: Annotation Check (Fix 10)
+            # If a task is classification or segmentation, check for label keywords
+            if any(t in ["classification", "segmentation", "detection"] for t in tasks):
+                if not any(w in text for w in ["label", "annotation", "mask", "bbox", "ground truth", "dataset"]):
+                    # If it's a paper seed, we're more lenient as description might be sparse
+                    if not ds.get("is_paper_seed"):
+                        continue
+            
+            checked.append(ds)
+            
+        return checked
 
     def _heuristic_filter(self, candidates: List[Dict], query: str, domain: str, modality: str = "any") -> List[Dict]:
         """
@@ -454,6 +650,44 @@ class DiscoveryAgent:
         # Re-sort and take top 120
         scored.sort(key=lambda x: x[0], reverse=True)
         return [ds for score, ds in scored[:120]]
+
+    def _inject_paper_benchmarks(self, candidates: List[Dict], discovery_context: Dict):
+        """Inject paper-discovered seeds as standalone candidates if not found elsewhere."""
+        existing_ids = {c.get("id", "").lower() for c in candidates}
+        existing_names = {c.get("id", "").split("/")[-1].lower() for c in candidates}
+        
+        injected = []
+        for name, meta in discovery_context.items():
+            name_lower = name.lower()
+            # Check if name is already represented in results (as ID or tail of ID)
+            if name_lower in existing_ids or name_lower in existing_names:
+                continue
+            
+            # Create a virtual candidate
+            ds = {
+                "id": meta["name"],
+                "source": meta.get("paper_source", "arxiv"), # Default to arxiv if missing, but we fixed service
+                "description": f"Research Dataset mentioned in: {meta['paper_title']}. Context: {meta['context']}",
+                "downloads": 100 + (meta["citations"] * 5), # Synthetic popularity
+                "likes": 10 + meta["citations"],
+                "url": meta["paper_url"],
+                "tags": ["research", "benchmark"],
+                "is_paper_seed": True,
+                "dataset_category": "research_benchmark",
+                "paper_purpose": meta["purpose"],
+                "paper_context": meta["context"],
+                "paper_modality": meta["modality"],
+                "paper_title": meta["paper_title"],
+                "paper_url": meta["paper_url"],
+                "paper_source": meta.get("paper_source", "arxiv"),
+                "year": meta["year"],
+                "citations": meta["citations"],
+                "dataset_size": meta.get("dataset_size"),
+                "annotation_type": meta.get("annotation_type")
+            }
+            injected.append(ds)
+        
+        candidates.extend(injected)
 
     @staticmethod
     def _enrich_with_paper_context(candidates: List[Dict], discovery_context: Dict):

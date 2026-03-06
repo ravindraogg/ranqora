@@ -76,18 +76,22 @@ class LLMService:
 
         self._enabled = self._gemini_enabled or (self.hf_client is not None)
 
-    async def _generate_content_with_fallback(self, prompt: str) -> str:
-        """Try Gemini first, then fallback to HF Qwen."""
-        if self._gemini_enabled:
+    async def _generate_content_with_fallback(self, prompt: str, schema: Any = None, provider: str = "gemini") -> str:
+        """
+        Fix 9: LLM Router.
+        Routes request based on preference but falls back on failure.
+        """
+        if provider == "gemini" and self._gemini_enabled:
             try:
                 # Standard generate call
                 response = self.gemini_client.models.generate_content(
                     model=self.gemini_model,
                     contents=prompt,
+                    config={"response_mime_type": "application/json"} if schema else None
                 )
                 return response.text.strip()
             except Exception as e:
-                logger.error(f"Gemini generation failed: {e}. Falling back to HF...")
+                logger.warning(f"Gemini failed, falling back to HuggingFace: {e}")
 
         if self.hf_client:
             try:
@@ -98,10 +102,10 @@ class LLMService:
                 )
                 return completion.choices[0].message.content.strip()
             except Exception as hf_e:
-                logger.error(f"HF / Qwen generation failed: {hf_e}")
-                raise hf_e
-
-        raise Exception("No LLM service enabled (neither Gemini nor HF).")
+                logger.error(f"HF fallback also failed: {hf_e}")
+                return ""
+        
+        return ""
 
     # ── UNIFIED: Parse + Plan in ONE structured call ─────────────────────────
 
@@ -140,8 +144,14 @@ Level 2: Dataset Role
 Level 3: Research Goal
 - This is the core semantic objective (e.g., "robustness", "generalization", "fairness", "classification", "segmentation").
 
+Level 4: Query Complexity
+- Options: "simple", "medium", "research"
+- Purpose: simple (e.g. "digit dataset"), medium (e.g. "speech command dataset"), research (e.g. "dataset for speech recognition in noisy environment with MFCC").
+
 You must also analyze:
-- What potential risks or limitations exist in finding this data
+- Expected Features: What specific features should be in the data (e.g., "MFCC", "Spectrogram", "Raw Waveform").
+- Dataset Format: Expected file structure (e.g. "audio + transcription", "images + masks").
+- Annotations: Detailed annotation requirement (e.g. "0-9 digit labels", "pixel-wise segmentation").
 - Spelling/Correction: Reconstruct the query into a logical, professionally formulated sentence.
 
 Your output must contain ALL of the following fields:
@@ -150,24 +160,26 @@ Your output must contain ALL of the following fields:
 2. "modality" - From Level 1.
 3. "dataset_role" - From Level 2.
 4. "research_goal" - From Level 3.
-5. "primary_tasks" - list of the MAIN ML tasks (e.g. "segmentation", "classification")
-6. "secondary_tasks" - list of RELATED or IMPLIED tasks.
-7. "search_query" - the BEST single short phrase (2-4 keywords) to search. Drop method names, adjectives, filler.
-8. "keyword_variants" - list of 4-6 alternative search terms. CRITICAL: Extract and combine keywords, do NOT just truncate the sentence. (e.g. "satellite flood dataset", "remote sensing flood segmentation", "flood detection satellite imagery" instead of "Enhancing Satellite Imagery for").
-9. "semantic_context" - ONE rich sentence describing the IDEAL dataset (modality, format, labels, domain, role).
-10. "objective" - ONE sentence summarizing the search goal.
-11. "constraints" - object with:
-   - "required_annotations": list of annotation types needed.
-   - "preferred_format": e.g. "image + mask pairs", "CSV", "JSON"
+5. "query_type" - From Level 4.
+6. "primary_tasks" - list of the MAIN ML tasks (e.g. "segmentation", "classification")
+7. "secondary_tasks" - list of RELATED or IMPLIED tasks.
+8. "search_query" - the BEST single short phrase (2-4 keywords) to search. Drop method names, adjectives, filler.
+9. "keyword_variants" - list of 4-6 alternative search terms.
+10. "semantic_context" - ONE rich sentence describing the IDEAL dataset.
+11. "objective" - ONE sentence summarizing the search goal.
+12. "constraints" - object with:
+   - "required_annotations": list of specific annotation types needed.
+   - "preferred_format": From Level 1/Analysis.
+   - "expected_features": list of key features.
    - "min_quality": "high", "medium", or "any"
-12. "uncertainty_level" - "low", "medium", or "high". 
-13. "interpretations" - list of 2-3 specific interpretations if uncertainty is > low (e.g. for "anomalies in data streams" -> ["network intrusion detection", "financial fraud detection"]).
-14. "strategy_reasoning" - 1-2 sentences explaining the search strategy decision.
-15. "tool_priority" - ordered list: ["arxiv", "kaggle", "huggingface", "github", "opendataportal"].
-16. "tool_rationale" - brief reason for tool ordering (1 sentence).
-17. "risk_notes" - list of 1-2 potential issues.
-18. "corrected_query" - The user's formally corrected query.
-19. "anti_keywords" - list of 4-8 terms that indicate IRRELEVANT datasets (e.g. ["tutorial", "course", "blog", "survey"]). NEVER include "benchmark" or "evaluation".
+13. "uncertainty_level" - "low", "medium", or "high". 
+14. "interpretations" - list of up to 8 specific interpretations if uncertainty is > low.
+15. "strategy_reasoning" - 1-2 sentences explaining the search strategy decision.
+16. "tool_priority" - ordered list: ["arxiv", "kaggle", "huggingface", "github", "opendataportal"].
+17. "tool_rationale" - brief reason for tool ordering (1 sentence).
+18. "risk_notes" - list of 1-2 potential issues.
+19. "corrected_query" - The user's formally corrected query.
+20. "anti_keywords" - list of 4-8 terms that indicate IRRELEVANT datasets.
 
 EXAMPLE for query: "Improving the Accuracy and Resilience of Machine Learning Models"
 {{
@@ -175,12 +187,21 @@ EXAMPLE for query: "Improving the Accuracy and Resilience of Machine Learning Mo
   "modality": "unknown",
   "dataset_role": "benchmark",
   "research_goal": "robustness evaluation",
+  "query_type": "medium",
   "primary_tasks": ["classification", "robustness testing"],
   "secondary_tasks": ["generalization"],
   "search_query": "robustness benchmarks",
   "keyword_variants": ["model resilience", "out-of-distribution evaluation", "adversarial robustness", "benchmark datasets"],
   "semantic_context": "Evaluative benchmark datasets used for testing machine learning model resilience and robustness across various domains.",
   "objective": "Identify standard benchmark datasets specifically designed for evaluating model robustness and resilience.",
+  "constraints": {{
+    "required_annotations": ["varied labels"],
+    "preferred_format": "any",
+    "expected_features": ["adversarial examples", "out-of-distribution samples"],
+    "min_quality": "high"
+  }},
+  "uncertainty_level": "medium",
+  "interpretations": ["computer vision robustness", "nlp model resilience"],
   "corrected_query": "Improving the accuracy and resilience of machine learning models.",
   "tool_priority": ["arxiv", "kaggle", "huggingface", "github", "opendataportal"],
   "tool_rationale": "Benchmarks are pioneered in research papers (ArXiv) and competitions (Kaggle)."
@@ -195,18 +216,32 @@ Return ONLY valid JSON (no markdown, no explanation).
         try:
             text = await self._generate_content_with_fallback(prompt)
 
-            # Strip markdown code fences if present
-            if "```" in text:
-                parts = text.split("```")
-                text = parts[1].strip()
-                if text.startswith("json"):
-                    text = text[4:].strip()
-
-            json_start = text.find("{")
-            json_end = text.rfind("}") + 1
-            text = text[json_start:json_end]
-
-            parsed = json.loads(text)
+            # Robust JSON extraction (Fix 16-point plan)
+            # Find all JSON-like blocks and take the last one (likely the actual result)
+            json_blocks = []
+            stack = 0
+            start_idx = -1
+            
+            for i, char in enumerate(text):
+                if char == '{':
+                    if stack == 0: start_idx = i
+                    stack += 1
+                elif char == '}':
+                    stack -= 1
+                    if stack == 0 and start_idx != -1:
+                        json_blocks.append(text[start_idx:i+1])
+            
+            if not json_blocks:
+                # Fallback to broad search if stack-based fails
+                json_start = text.find("{")
+                json_end = text.rfind("}") + 1
+                if json_start != -1 and json_end > json_start:
+                    parsed = json.loads(text[json_start:json_end])
+                else:
+                    raise ValueError("No JSON block found in LLM response")
+            else:
+                # Success: take the LAST block
+                parsed = json.loads(json_blocks[-1])
         except Exception as e:
             logger.error(f"Error in unified parse_and_plan with LLM: {e}")
             parsed = self._fallback_plan(query)
@@ -266,6 +301,8 @@ Return ONLY valid JSON (no markdown, no explanation).
             parsed["dataset_role"] = "general"
         if not parsed.get("research_goal"):
             parsed["research_goal"] = ""
+        if not parsed.get("query_type"):
+            parsed["query_type"] = "medium"
         if not primary:
             parsed["primary_tasks"] = []
         if not secondary:
@@ -319,6 +356,7 @@ Return ONLY valid JSON (no markdown, no explanation).
             "modality": "unknown",
             "dataset_role": "general",
             "research_goal": "",
+            "query_type": "medium",
             "primary_tasks": [],
             "secondary_tasks": [],
             "tasks": [],

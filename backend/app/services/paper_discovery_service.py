@@ -10,12 +10,14 @@ Precedence: IEEE Xplore > ArXiv > Semantic Scholar
 Flow:
   Query → Paper Search → Extract Dataset Names → Return as seeds
 """
-
 import re
 import json
 import asyncio
 import logging
 import xml.etree.ElementTree as ET
+import os
+import time
+import sqlite3
 from typing import List, Dict, Any
 
 import httpx
@@ -53,6 +55,8 @@ DATASET_PATTERNS = [
     r"(?:datasets?|benchmarks?):?\s*(\b[A-Z][A-Za-z0-9\-_]+)(?:\s*,\s*\b[A-Z][A-Za-z0-9\-_]+)*",
     # "evaluated on X" (aggressive)
     r"(?:evaluated|tested|benchmarked)\s+on\s+(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][A-Za-z0-9\-_]+){0,1})",
+    # Additional common patterns (Fix 16-point plan)
+    r"(\b[A-Z][A-Za-z0-9\-_]+(?:\s[A-Z][a-z0-9]+)*)\s+(?:corpus|benchmark|collection|speech dataset|audio dataset|benchmark dataset)",
 ]
 
 # Common false positives to filter out
@@ -100,22 +104,111 @@ FALSE_POSITIVES = {
 class PaperDiscoveryService:
     """Discovers datasets referenced in academic papers."""
 
+    def __init__(self):
+        self.cache_dir = "cache/papers"
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.db_path = os.path.join(self.cache_dir, "papers_cache.db")
+        self.cache_ttl = 86400  # 24 hours
+        self._init_db()
+
+    def _init_db(self):
+        """Initialize the SQLite database for paper caching."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS paper_cache (
+                    query_key TEXT PRIMARY KEY,
+                    data TEXT,
+                    timestamp REAL
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to initialize SQLite cache: {e}")
+
     async def discover(self, api_query: str, max_papers: int = 50) -> List[Dict[str, Any]]:
         """
-        Search papers and extract rich dataset metadata.
+        Search papers and extract rich dataset metadata with caching.
+        Primary cache: SQLite, Secondary/Legacy: JSON.
         """
+        discovered = []
+        cache_key = re.sub(r'[^a-zA-Z0-9]', '_', api_query).lower()
+        
+        # 1. Check SQLite Cache
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT data, timestamp FROM paper_cache WHERE query_key = ?", (cache_key,))
+            row = cursor.fetchone()
+            if row:
+                data_json, timestamp = row
+                if time.time() - timestamp < self.cache_ttl:
+                    logger.info(f"SQLite Paper Cache HIT: {api_query}")
+                    conn.close()
+                    return json.loads(data_json)
+            conn.close()
+        except Exception as e:
+            logger.warning(f"SQLite cache read error: {e}")
+
+        # 2. Check JSON Legacy Cache (Fallback)
+        cache_path = os.path.join(self.cache_dir, f"{cache_key}.json")
+        if os.path.exists(cache_path):
+            if time.time() - os.path.getmtime(cache_path) < self.cache_ttl:
+                try:
+                    with open(cache_path, "r") as f:
+                        logger.info(f"JSON Paper Cache HIT: {api_query}")
+                        # Migrate to SQLite
+                        data = json.load(f)
+                        self._save_to_sqlite(cache_key, data)
+                        return data
+                except Exception as e:
+                    logger.warning(f"JSON Cache read error: {e}")
+
+        # 3. Search
         papers = await self._search_papers(api_query, max_papers)
         
         if not papers:
-            logger.info("Paper discovery: no papers found, skipping.")
-            return []
+            logger.info("Paper discovery: no papers found, using fallback seed.")
+            fallback = api_query if "dataset" in api_query.lower() else f"{api_query} dataset"
+            return [{"name": api_query, "seed": fallback}]
         
         discovered = self._extract_all_dataset_metadata(papers)
         
+        if not discovered:
+            fallback = api_query if "dataset" in api_query.lower() else f"{api_query} dataset"
+            return [{"name": api_query, "seed": fallback}]
+            
+        final_results = discovered[:30]
+
+        # 4. Save to both caches (User request: save in .db)
+        self._save_to_sqlite(cache_key, final_results)
+        
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(final_results, f)
+        except Exception as e:
+            logger.warning(f"JSON Cache write error: {e}")
+        
         logger.info(
-            f"Paper discovery found {len(discovered)} dataset seeds with context."
+            f"Paper discovery found {len(final_results)} dataset seeds with context."
         )
-        return discovered[:30]  # Cap at 30 seeds to allow diversity from multiple tools
+        return final_results
+
+    def _save_to_sqlite(self, cache_key: str, data: List[Dict[str, Any]]):
+        """Helper to save discovery results to SQLite."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO paper_cache (query_key, data, timestamp) VALUES (?, ?, ?)",
+                (cache_key, json.dumps(data), time.time())
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"SQLite cache save error: {e}")
 
     async def _search_papers(self, query: str, limit: int) -> List[Dict[str, str]]:
         """Search IEEE Xplore > ArXiv > Semantic Scholar. Merge results."""
@@ -216,6 +309,16 @@ class PaperDiscoveryService:
             logger.warning(f"IEEE Xplore search error: {e}")
             return []
 
+    async def _safe_request(self, client, url, params):
+        """Fix: Semantic Scholar Rate Limit Retry."""
+        for _ in range(3):
+            resp = await client.get(url, params=params)
+            if resp.status_code != 429:
+                return resp
+            logger.info("Semantic Scholar rate-limited (429), retrying in 2s...")
+            await asyncio.sleep(2)
+        return resp
+
     async def _search_semantic_scholar(self, query: str, limit: int) -> List[Dict[str, str]]:
         """Search Semantic Scholar free API."""
         try:
@@ -227,7 +330,7 @@ class PaperDiscoveryService:
                 "fields": "title,abstract,url,year,citationCount"
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(S2_SEARCH_URL, params=params)
+                response = await self._safe_request(client, S2_SEARCH_URL, params)
                 if response.status_code == 200:
                     data = response.json()
                     papers = [
@@ -235,8 +338,9 @@ class PaperDiscoveryService:
                             "title": p.get("title", ""), 
                             "abstract": p.get("abstract", ""),
                             "url": p.get("url"),
-                            "year": p.get("year"),
-                            "citations": p.get("citationCount", 0)
+                            "year": str(p.get("year")) if p.get("year") else None,
+                            "citations": p.get("citationCount", 0),
+                            "source": "semantic_scholar"
                         } for p in data.get("data", [])
                     ]
                     
@@ -245,7 +349,7 @@ class PaperDiscoveryService:
                         parts = query.split()[:2]
                         fallback_q = f"{' '.join(parts)} dataset"
                         params["query"] = fallback_q
-                        response = await client.get(S2_SEARCH_URL, params=params)
+                        response = await self._safe_request(client, S2_SEARCH_URL, params)
                         if response.status_code == 200:
                             data = response.json()
                             papers = [{"title": p.get("title", ""), "abstract": p.get("abstract", "")} for p in data.get("data", [])]
@@ -305,7 +409,8 @@ class PaperDiscoveryService:
                             "abstract": abstract,
                             "url": url,
                             "year": year,
-                            "citations": 0  # ArXiv doesn't provide citations directly
+                            "citations": 0,
+                            "source": "arxiv"
                         })
                 
                 # Fallback if 10 results from ArXiv but 0 matches
@@ -384,7 +489,7 @@ class PaperDiscoveryService:
                         "paper_title": paper.get("title"),
                         "paper_url": paper.get("url"),
                         "paper_source": paper.get("source", "arxiv"),
-                        "year": paper.get("year"),
+                        "year": str(paper.get("year")) if paper.get("year") else None,
                         "citations": paper.get("citations", 0),
                         "dataset_size": ds_size,
                         "annotation_type": ann_type

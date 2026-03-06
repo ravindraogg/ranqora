@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import threading
 import re
 import logging
 from datetime import datetime, timezone
@@ -39,10 +40,16 @@ TASK_INTENT_KEYWORDS: Dict[str, List[str]] = {
     "topic modeling":     ["topic", "lda", "theme", "category", "topic model"],
 }
 
-# ── Source-type penalty ──────────────────────────────────────────────────────
-SOURCE_PENALTIES: Dict[str, float] = {
-    "github":  0.85,
-    "arxiv":   0.90,
+# ── Source Trust Scores (Fix 2) ─────────────────────────────────────────────
+# Weights for source reliability. Kaggle/HF are primary, others are secondary/noisy.
+SOURCE_TRUST_SCORES: Dict[str, float] = {
+    "kaggle":         0.95,
+    "huggingface":    0.95,
+    "opendataportal": 0.85,
+    "github":         0.65,
+    "arxiv":          0.45,
+    "ieee":           0.50,
+    "semanticscholar": 0.45,
 }
 
 DATASET_INDICATOR_KEYWORDS = [
@@ -161,7 +168,32 @@ def _source_penalty(ds: Dict) -> float:
 
     # ── Kaggle & HuggingFace: fully trusted ──
     return 1.0
+def _is_real_dataset(item: Dict) -> bool:
+    """
+    Fix 7: Stronger Dataset Signal Filter.
+    Checks description and name for core dataset markers.
+    """
+    desc = (item.get("description") or "").lower()
+    name = (item.get("id") or "").lower()
+    tags = " ".join(item.get("tags", [])).lower()
+    text = f"{name} {desc} {tags}"
 
+    dataset_keywords = [
+        "dataset", "corpus", "benchmark", "speech commands", 
+        "mnist", "fsdd", "data set", "collection", "labeled",
+        "ground truth", "annotations", "cvpr", "voxceleb", "librispeech"
+    ]
+    
+    # Negative signals (mostly code/framework projects)
+    code_keywords = ["flask", "web app", "django", "implementation of", "pytorch model", "classifier script"]
+
+    has_data = any(k in text for k in dataset_keywords)
+    has_code_only = any(k in name for k in code_keywords) and not has_data
+
+    if has_code_only:
+        return False
+        
+    return has_data or len(desc) > 100 # If desc is rich, give benefit of doubt
 
 def _benchmark_score(ds: Dict) -> float:
     """Boost datasets that are identified as benchmarks."""
@@ -489,7 +521,13 @@ def _apply_hard_constraints(
 
     return filtered
 
+def _dataset_size_filter(ds):
+    size = ds.get("downloads",0)
+    desc = ds.get("description","").lower()
 
+    if size < 50 and "benchmark" not in desc:
+        return False
+    return True
 def rank_datasets(
     query: str,
     dataset_candidates: List[Dict[str, Any]],
@@ -498,8 +536,19 @@ def rank_datasets(
     keyword_variants: List[str] | None = None,
     anti_keywords: List[str] | None = None,
     preferred_format: str | None = None,
-    top_k: int = 7
+    top_k: int = 7,
+    stop_event: threading.Event | None = None
+    
 ) -> List[Dict[str, Any]]:
+    # Fix 7: Multi-source Real Dataset Filtering
+    candidates = [c for c in dataset_candidates if _is_real_dataset(c)]
+    
+    # Fix 3: Remove pure research papers (ArXiv papers without 'dataset' in desc)
+    candidates = [
+        c for c in candidates
+        if not (c.get("source") == "arxiv" and "dataset" not in c.get("description","").lower())
+    ]
+    candidates = [c for c in candidates if _dataset_size_filter(c)]
     """
     Multi-factor ranking engine with split-field embeddings + dataset intelligence.
 
@@ -549,6 +598,10 @@ def rank_datasets(
     tags_list = []
 
     for ds in filtered_candidates:
+        if stop_event and stop_event.is_set():
+            logger.info("Ranking aborted via stop_event.")
+            return []
+            
         raw_title = ds.get("id", "")
         titles.append(_clean_title_for_embedding(raw_title))
 
@@ -642,16 +695,22 @@ def rank_datasets(
         B_i = _benchmark_score(ds)
         A_i = _annotation_score(ds)
 
-        # Rebalanced formula (Point 10)
-        # 0.4*Sim + 0.15*Task + 0.10*Benchmark + 0.10*Annotation + 0.1*Graph + 0.1*Quality + 0.05*Pop
+        # F_i = _score_freshness(ds.get("last_modified"))
+        source = ds.get("source", "unknown").lower()
+        trust_score = SOURCE_TRUST_SCORES.get(source, 0.4)
+
+        # ── Final Weighted Re-ranking (Fix 4: Activate Graph Learning) ──
+        # Rebalanced Formula (based on user requested weights + existing factors)
+        # 0.30 sem + 0.15 task + 0.10 kw + 0.10 qual + 0.10 pop + 0.15 graph + 0.05 trust + 0.05 fresh = 1.0
         base_score = (
-            (0.40 * E_i) +
+            (0.30 * E_i) +
             (0.15 * T_i) +
-            (0.15 * B_i) +
-            (0.10 * A_i) +
-            (0.10 * G_i) +
-            (0.05 * Q_i) +
-            (0.05 * P_i)
+            (0.10 * K_i) +
+            (0.10 * Q_i) +
+            (0.10 * P_i) +
+            (0.15 * G_i) +
+            (0.05 * trust_score) +
+            (0.05 * F_i)
         )
 
         # ── Additive task intent bonus (capped at 0.10) ──
@@ -675,15 +734,12 @@ def rank_datasets(
             "semantic": E_i,
             "keyword_overlap": K_i,
             "task": T_i,
-            "type_match": DT_i,
-            "format_match": FM_i,
             "quality": Q_i,
             "popularity": P_i,
             "graph": G_i,
-            "license": L_i,
+            "source_trust": trust_score,
             "freshness": F_i,
             "intent_bonus": intent_bonus,
-            "source_penalty": src_penalty,
             "anti_keyword_penalty": anti_penalty,
         }
         ds["ranking_breakdown"] = breakdown

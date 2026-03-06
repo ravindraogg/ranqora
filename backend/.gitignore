@@ -30,3 +30,5 @@ Thumbs.db
 # ── Docker ─────────────────────────────────────
 docker-compose.override.yml
 pipeline_output
+scripts
+cache

@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import {
     Hexagon, ArrowLeft, Search, Loader2, ExternalLink,
     Download, Heart, Tag, Calendar, BarChart2, X, ChevronRight, ChevronDown, ChevronUp, Clock,
-    Database, Globe, FileText, Brain, Zap, Shield, AlertTriangle
+    Database, Globe, FileText, Brain, Zap, Shield, AlertTriangle, Menu
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
@@ -22,6 +22,7 @@ interface DatasetMetadata {
     explanation?: Explanation;
     // ── Category & Research Metadata ──
     dataset_category?: 'practical' | 'research_benchmark';
+    is_paper_seed?: boolean;
     paper_title?: string;
     paper_url?: string;
     benchmark_task?: string;
@@ -93,7 +94,11 @@ function SourceBadge({ source }: { source: string }) {
     const map: Record<string, { bg: string; label: string }> = {
         huggingface: { bg: 'bg-yellow-50 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-500/20', label: 'HuggingFace' },
         kaggle: { bg: 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/20', label: 'Kaggle' },
-        intranet: { bg: 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400 border-green-200 dark:border-green-500/20', label: 'Intranet' },
+        arxiv: { bg: 'bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/20', label: 'ArXiv' },
+        ieee: { bg: 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border-indigo-200 dark:border-indigo-500/20', label: 'IEEE Xplore' },
+        semantic_scholar: { bg: 'bg-cyan-50 dark:bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-200 dark:border-cyan-500/20', label: 'Semantic Scholar' },
+        semanticscholar: { bg: 'bg-cyan-50 dark:bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-200 dark:border-cyan-500/20', label: 'S2' },
+        opendataportal: { bg: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20', label: 'Open Data' },
     };
     const style = map[source.toLowerCase()] ?? { bg: 'bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/10', label: source };
     return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${style.bg}`}>{style.label}</span>;
@@ -122,6 +127,11 @@ function DatasetCard({ ds, onClick, isSelected }: { ds: DatasetMetadata; onClick
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h3 className="text-sm font-semibold text-gray-900 dark:text-white truncate max-w-[200px]">{ds.id}</h3>
                         <SourceBadge source={ds.source} />
+                        {ds.is_paper_seed && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 shrink-0">
+                                <Brain className="w-3 h-3" /> Peer Reviewed
+                            </span>
+                        )}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 leading-relaxed">{ds.description}</p>
                 </div>
@@ -290,9 +300,6 @@ function ResearchBenchmarkCard({ ds, onClick }: { ds: DatasetMetadata; onClick: 
                         </span>
                     )}
                 </div>
-                <span className="text-xs text-indigo-500 font-black group-hover:underline underline-offset-4 flex items-center gap-1">
-                    Explore <ChevronRight className="w-3.5 h-3.5" />
-                </span>
             </div>
         </motion.div>
     );
@@ -592,6 +599,9 @@ function SearchResultsContent() {
     const [agentPerception, setAgentPerception] = useState<AgentPerception | null>(null);
     const [isResearchExpanded, setIsResearchExpanded] = useState(true);
     const [isQueryExpanded, setIsQueryExpanded] = useState(false);
+    const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+    const [showStagePopup, setShowStagePopup] = useState(true);
+    const [showErrorPopup, setShowErrorPopup] = useState(false);
 
     const querySentences = useMemo(() => {
         return query.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [query];
@@ -613,6 +623,14 @@ function SearchResultsContent() {
         }, 100);
         return () => clearInterval(interval);
     }, [isLoading]);
+
+    useEffect(() => {
+        if (apiError) {
+            setShowErrorPopup(true);
+            const timer = setTimeout(() => setShowErrorPopup(false), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [apiError]);
 
     const elapsedDisplay = (elapsedMs / 1000).toFixed(1);
 
@@ -755,8 +773,282 @@ function SearchResultsContent() {
         return () => { cancelled = true; };
     }, [clientId, query, router]);
 
+    const renderSidebarContent = () => {
+        return (
+            <AnimatePresence mode="wait">
+                {isLoading ? (
+                    <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-5">
+                        <div className="flex items-center gap-3 pb-4 border-b border-gray-100 dark:border-white/5">
+                            <div className="relative w-8 h-8 shrink-0">
+                                <div className="absolute inset-0 border-2 border-gray-100 dark:border-white/5 rounded-full"></div>
+                                <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin"></div>
+                                <Hexagon className="absolute inset-0 m-auto w-3.5 h-3.5 text-indigo-500" />
+                            </div>
+                            <div className="min-w-0">
+                                <p className="text-sm font-semibold text-gray-900 dark:text-white">Processing</p>
+                                <p className="text-xs text-gray-400 truncate">&quot;{query}&quot;</p>
+                            </div>
+                        </div>
+                        <div className="space-y-3">
+                            {stageLabels.map((label, idx) => {
+                                const isPast = idx < currentStageIndex - 1;
+                                const isCurrent = idx === currentStageIndex - 1;
+                                return (
+                                    <motion.div key={idx} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: idx * 0.04 }}
+                                        className={`flex items-start gap-2.5 text-xs transition-all duration-300 ${isPast ? 'text-gray-400 dark:text-gray-600' : isCurrent ? 'text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-gray-300 dark:text-gray-700'}`}
+                                    >
+                                        <div className="w-4 h-4 flex-none flex items-center justify-center mt-0.5">
+                                            {isPast && <div className="w-2 h-2 rounded-full bg-green-500"></div>}
+                                            {isCurrent && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                            {!isPast && !isCurrent && <div className="w-2 h-2 rounded-full border border-current opacity-40"></div>}
+                                        </div>
+                                        <span className="leading-snug">{label}</span>
+                                    </motion.div>
+                                );
+                            })}
+                        </div>
+                        <div>
+                            <div className="flex justify-between text-[11px] text-gray-400 dark:text-gray-600 mb-1.5">
+                                <span>Progress</span>
+                                <span>{Math.round((currentStageIndex / TOTAL_STAGES) * 100)}%</span>
+                            </div>
+                            <div className="h-1 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
+                                <motion.div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-blue-500 rounded-full"
+                                    initial={{ width: '0%' }}
+                                    animate={{ width: `${(currentStageIndex / TOTAL_STAGES) * 100}%` }}
+                                    transition={{ duration: 0.4, ease: 'easeOut' }}
+                                />
+                            </div>
+                        </div>
+                    </motion.div>
+                ) : (
+                    <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
+                        <div className="pb-4 border-b border-gray-100 dark:border-white/5">
+                            <p className="text-xs text-gray-400 mb-1">Query</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white leading-relaxed">&quot;{displayQuery}&quot;</p>
+                            {isQueryLong && (
+                                <button
+                                    onClick={() => setIsQueryExpanded(!isQueryExpanded)}
+                                    className="text-xs text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 mt-1 flex items-center gap-1"
+                                >
+                                    {isQueryExpanded ? 'Show less' : 'Show full query'}
+                                    {isQueryExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                </button>
+                            )}
+                        </div>
+                        <div>
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Results</p>
+                            <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-gray-500">Total datasets filtered</span>
+                                    <span className="font-semibold text-gray-900 dark:text-white">{datasets.length}</span>
+                                </div>
+                                {Object.entries(sourceCounts).map(([src, cnt]) => (
+                                    <div key={src} className="flex justify-between text-xs">
+                                        <span className="text-gray-400 capitalize">{src}</span>
+                                        <span className="text-gray-600 dark:text-gray-400">{cnt}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        {/* Agent Intelligence — Reasoning Trace */}
+                        {goalPlan && (
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-2">
+                                    <Brain className="w-3.5 h-3.5 text-indigo-500" />
+                                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Agent Thinking</p>
+                                </div>
+
+                                {/* Objective */}
+                                {goalPlan.objective && (
+                                    <div className="bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-2xl p-3">
+                                        <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">Objective</p>
+                                        <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{goalPlan.objective}</p>
+                                    </div>
+                                )}
+
+                                {/* Strategy Reasoning */}
+                                {agentPerception?.strategy_reasoning && (
+                                    <div className="bg-purple-50 dark:bg-purple-500/10 border border-purple-100 dark:border-purple-500/20 rounded-2xl p-3">
+                                        <p className="text-[10px] font-bold text-purple-500 uppercase tracking-widest mb-1">Strategy</p>
+                                        <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{agentPerception.strategy_reasoning}</p>
+                                    </div>
+                                )}
+
+                                {/* Tool Pipeline with rationale */}
+                                {goalPlan.search_strategy?.tool_priority && (
+                                    <div className="bg-gray-50 dark:bg-white/3 border border-gray-200 dark:border-white/5 rounded-2xl p-3">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Tool Pipeline</p>
+                                        <div className="flex items-center gap-1 flex-wrap mb-2">
+                                            {goalPlan.search_strategy.tool_priority.map((t, i) => (
+                                                <span key={t} className="flex items-center gap-1">
+                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-400 font-medium">{t}</span>
+                                                    {i < (goalPlan.search_strategy?.tool_priority?.length ?? 0) - 1 && <ChevronRight className="w-2.5 h-2.5 text-gray-300" />}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        {agentPerception?.tool_rationale && (
+                                            <p className="text-[10px] text-gray-500 italic leading-relaxed">{agentPerception.tool_rationale}</p>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Modality + Uncertainty badges */}
+                                {agentPerception && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {agentPerception.modality && agentPerception.modality !== 'unknown' && (
+                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 font-medium">
+                                                {agentPerception.modality}
+                                            </span>
+                                        )}
+                                        {agentPerception.domain && (
+                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-medium">
+                                                {agentPerception.domain}
+                                            </span>
+                                        )}
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${agentPerception.uncertainty_level === 'low'
+                                            ? 'bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400'
+                                            : agentPerception.uncertainty_level === 'high'
+                                                ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400'
+                                                : 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400'
+                                            }`}>
+                                            {agentPerception.uncertainty_level} uncertainty
+                                        </span>
+                                    </div>
+                                )}
+
+                                {/* Constraints */}
+                                {agentPerception?.constraints && (
+                                    <div className="space-y-1.5">
+                                        {agentPerception.constraints.required_annotations && agentPerception.constraints.required_annotations.length > 0 && (
+                                            <div>
+                                                <p className="text-[10px] text-gray-400 mb-1">Required annotations</p>
+                                                <div className="flex flex-wrap gap-1">
+                                                    {agentPerception.constraints.required_annotations.map((a, i) => (
+                                                        <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400">{a}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {agentPerception.constraints.preferred_format && agentPerception.constraints.preferred_format !== 'any' && (
+                                            <p className="text-[10px] text-gray-500">Format: {agentPerception.constraints.preferred_format}</p>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Task pills — primary + secondary */}
+                                {agentPerception?.primary_tasks && agentPerception.primary_tasks.length > 0 && (
+                                    <div>
+                                        <p className="text-[10px] text-gray-400 mb-1.5">Tasks</p>
+                                        <div className="flex flex-wrap gap-1">
+                                            {agentPerception.primary_tasks.map((t, i) => (
+                                                <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 text-purple-600 dark:text-purple-400 font-medium">{t}</span>
+                                            ))}
+                                            {agentPerception.secondary_tasks?.map((t, i) => (
+                                                <span key={`s${i}`} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-500">{t}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Search Variants */}
+                                {goalPlan.search_strategy?.keyword_variants && goalPlan.search_strategy.keyword_variants.length > 0 && (
+                                    <div className="bg-gray-50 dark:bg-white/3 border border-gray-200 dark:border-white/5 rounded-2xl p-3">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Search Variants</p>
+                                        <div className="flex flex-wrap gap-1">
+                                            {goalPlan.search_strategy.keyword_variants.map((v, i) => (
+                                                <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-400">{v}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Risk Notes */}
+                                {agentPerception?.risk_notes && agentPerception.risk_notes.length > 0 && (
+                                    <div className="space-y-1">
+                                        {agentPerception.risk_notes.map((note, i) => (
+                                            <div key={i} className="flex items-start gap-1.5">
+                                                <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5 shrink-0" />
+                                                <p className="text-[10px] text-gray-500 dark:text-gray-500 leading-relaxed">{note}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Self-Adjustment Messages */}
+                        {agentReport?.evaluation?.self_adjustment && agentReport.evaluation.self_adjustment.length > 0 && (
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                    <Zap className="w-3.5 h-3.5 text-amber-500" />
+                                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Agent Adjustments</p>
+                                </div>
+                                {agentReport.evaluation.self_adjustment.map((msg, i) => (
+                                    <div key={i} className="bg-amber-50 dark:bg-amber-500/5 border border-amber-200 dark:border-amber-500/15 rounded-2xl p-3">
+                                        <p className="text-[10px] text-amber-700 dark:text-amber-400 leading-relaxed">{msg}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Uncertainty Report */}
+                        {agentReport?.uncertainty && (
+                            <div className="space-y-2">
+                                <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Confidence</p>
+                                <div className={`rounded-2xl p-3 text-xs leading-relaxed border ${agentReport.uncertainty.quality_label === 'strong'
+                                    ? 'bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-700 dark:text-green-400'
+                                    : agentReport.uncertainty.quality_label === 'adequate'
+                                        ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20 text-amber-700 dark:text-amber-400'
+                                        : 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-700 dark:text-red-400'
+                                    }`}>
+                                    {agentReport.uncertainty.overall}
+                                </div>
+                                {agentReport.uncertainty.known_gaps && agentReport.uncertainty.known_gaps.length > 0 && (
+                                    <div className="space-y-1">
+                                        {agentReport.uncertainty.known_gaps.map((gap, i) => (
+                                            <p key={i} className="text-[10px] text-gray-500 dark:text-gray-500 leading-relaxed"> {gap}</p>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {apiError && (
+                            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl p-3">
+                                <p className="text-xs text-red-600 dark:text-red-400 font-medium">Backend Error</p>
+                                <p className="text-xs text-red-500 mt-1">{apiError}</p>
+                            </div>
+                        )}
+                        {status && !apiError && (
+                            <div className="bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 rounded-2xl p-3">
+                                <p className="text-xs text-green-600 dark:text-green-400">{status}</p>
+                            </div>
+                        )}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        );
+    };
+
     return (
         <div className="h-screen w-screen bg-black p-2 md:p-3 overflow-hidden flex flex-col">
+            <AnimatePresence>
+                {showErrorPopup && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -20, x: '-50%' }}
+                        animate={{ opacity: 1, y: 0, x: '-50%' }}
+                        exit={{ opacity: 0, y: -20, x: '-50%' }}
+                        className="fixed top-10 left-1/2 z-[100] px-6 py-3 rounded-2xl bg-red-600 shadow-2xl shadow-red-500/30 flex items-center gap-3 border border-red-500/50"
+                    >
+                        <AlertTriangle className="w-5 h-5 text-white" />
+                        <span className="text-sm font-bold text-white whitespace-nowrap">Unknown error occurred</span>
+                        <button onClick={() => setShowErrorPopup(false)} className="ml-2 hover:bg-white/10 rounded-full p-1 transition-colors">
+                            <X className="w-4 h-4 text-white/70" />
+                        </button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
             <div className="flex-1 bg-[#FAFAFA] dark:bg-[#0c0c0e] rounded-2xl md:rounded-3xl border border-gray-200 dark:border-white/10 flex flex-col overflow-hidden shadow-2xl">
 
                 {/* Header */}
@@ -772,6 +1064,15 @@ function SearchResultsContent() {
                             <ArrowLeft className="w-4 h-4 md:w-5 md:h-5" />
                             <span className="text-xs md:text-sm font-semibold hidden sm:inline">Go Back</span>
                         </Link>
+                        {/* Mobile Hamburger */}
+                        {!isLoading && (
+                            <button
+                                onClick={() => setIsMobileSidebarOpen(true)}
+                                className="md:hidden p-2 rounded-full bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-400"
+                            >
+                                <Menu className="w-5 h-5" />
+                            </button>
+                        )}
                     </div>
                     <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex h-9 w-96 items-center justify-center rounded-full bg-gray-50 dark:bg-black border border-gray-200 dark:border-white/10 text-sm font-mono text-gray-500 shadow-inner">
                         ranqora / search / results
@@ -791,269 +1092,108 @@ function SearchResultsContent() {
                         </div>
                         <div className="hidden sm:flex items-center gap-2 opacity-70">
                             <Hexagon className="w-4 h-4 text-indigo-500" />
-                            <span className="text-xs font-bold text-gray-900 dark:text-white tracking-wider uppercase">Ranqora</span>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-gray-900 dark:text-white tracking-wider uppercase">Ranqora</span>
+                                <span className="text-[8px] font-mono text-indigo-500 font-bold -mt-1">v1.1 agent</span>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 {/* Body */}
-                <div className="flex-1 flex overflow-hidden">
+                <div className="flex-1 flex overflow-hidden relative">
 
-                    {/* LEFT SIDEBAR */}
-                    <div className="w-72 border-r border-gray-200 dark:border-white/5 shrink-0 hidden md:flex flex-col p-5 gap-6 overflow-y-auto">
-                        <AnimatePresence mode="wait">
-                            {isLoading ? (
-                                <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-5">
-                                    <div className="flex items-center gap-3 pb-4 border-b border-gray-100 dark:border-white/5">
-                                        <div className="relative w-8 h-8 shrink-0">
-                                            <div className="absolute inset-0 border-2 border-gray-100 dark:border-white/5 rounded-full"></div>
+                    {/* Mobile Stage Popup (Centered) */}
+                    <AnimatePresence>
+                        {isLoading && (
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                className="fixed inset-0 z-[100] flex items-center justify-center p-6 md:hidden"
+                            >
+                                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { }} />
+                                <motion.div
+                                    initial={{ scale: 0.9, y: 20 }}
+                                    animate={{ scale: 1, y: 0 }}
+                                    className="relative w-full max-w-sm bg-white dark:bg-[#111113] rounded-[2.5rem] border border-gray-200 dark:border-white/10 p-8 shadow-2xl flex flex-col gap-6"
+                                >
+                                    <div className="flex items-center gap-4">
+                                        <div className="relative w-12 h-12 shrink-0">
+                                            <div className="absolute inset-0 border-2 border-indigo-500/20 rounded-full"></div>
                                             <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin"></div>
-                                            <Hexagon className="absolute inset-0 m-auto w-3.5 h-3.5 text-indigo-500" />
+                                            <Hexagon className="absolute inset-0 m-auto w-5 h-5 text-indigo-500" />
                                         </div>
-                                        <div className="min-w-0">
-                                            <p className="text-sm font-semibold text-gray-900 dark:text-white">Processing</p>
-                                            <p className="text-xs text-gray-400 truncate">&quot;{query}&quot;</p>
+                                        <div>
+                                            <h3 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">Agent Discovery</h3>
+                                            <p className="text-xs text-gray-400 truncate max-w-[180px] italic">&quot;{query}&quot;</p>
                                         </div>
                                     </div>
-                                    <div className="space-y-3">
+
+                                    <div className="space-y-4">
                                         {stageLabels.map((label, idx) => {
                                             const isPast = idx < currentStageIndex - 1;
                                             const isCurrent = idx === currentStageIndex - 1;
                                             return (
-                                                <motion.div key={idx} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: idx * 0.04 }}
-                                                    className={`flex items-start gap-2.5 text-xs transition-all duration-300 ${isPast ? 'text-gray-400 dark:text-gray-600' : isCurrent ? 'text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-gray-300 dark:text-gray-700'}`}
-                                                >
-                                                    <div className="w-4 h-4 flex-none flex items-center justify-center mt-0.5">
-                                                        {isPast && <div className="w-2 h-2 rounded-full bg-green-500"></div>}
-                                                        {isCurrent && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                                                        {!isPast && !isCurrent && <div className="w-2 h-2 rounded-full border border-current opacity-40"></div>}
+                                                <div key={idx} className={`flex items-start gap-3 text-sm transition-opacity ${isPast ? 'opacity-40' : isCurrent ? 'opacity-100' : 'opacity-20'}`}>
+                                                    <div className="w-5 h-5 flex items-center justify-center mt-0.5">
+                                                        {isPast && <div className="w-2 h-2 rounded-full bg-green-500" />}
+                                                        {isCurrent && <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />}
+                                                        {!isPast && !isCurrent && <div className="w-2 h-2 rounded-full border border-gray-400" />}
                                                     </div>
-                                                    <span className="leading-snug">{label}</span>
-                                                </motion.div>
+                                                    <span className={isCurrent ? 'font-bold text-gray-900 dark:text-white' : 'text-gray-500'}>{label}</span>
+                                                </div>
                                             );
                                         })}
                                     </div>
-                                    <div>
-                                        <div className="flex justify-between text-[11px] text-gray-400 dark:text-gray-600 mb-1.5">
+
+                                    <div className="pt-2">
+                                        <div className="flex justify-between text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-2">
                                             <span>Progress</span>
                                             <span>{Math.round((currentStageIndex / TOTAL_STAGES) * 100)}%</span>
                                         </div>
-                                        <div className="h-1 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
-                                            <motion.div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-blue-500 rounded-full"
-                                                initial={{ width: '0%' }}
+                                        <div className="h-1.5 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
+                                            <motion.div
+                                                className="h-full bg-indigo-500"
+                                                initial={{ width: 0 }}
                                                 animate={{ width: `${(currentStageIndex / TOTAL_STAGES) * 100}%` }}
-                                                transition={{ duration: 0.4, ease: 'easeOut' }}
                                             />
                                         </div>
                                     </div>
                                 </motion.div>
-                            ) : (
-                                <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
-                                    <div className="pb-4 border-b border-gray-100 dark:border-white/5">
-                                        <p className="text-xs text-gray-400 mb-1">Query</p>
-                                        <p className="text-sm font-medium text-gray-900 dark:text-white leading-relaxed">&quot;{displayQuery}&quot;</p>
-                                        {isQueryLong && (
-                                            <button
-                                                onClick={() => setIsQueryExpanded(!isQueryExpanded)}
-                                                className="text-xs text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 mt-1 flex items-center gap-1"
-                                            >
-                                                {isQueryExpanded ? 'Show less' : 'Show full query'}
-                                                {isQueryExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                                            </button>
-                                        )}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* Mobile Sidebar Slider */}
+                    <AnimatePresence>
+                        {isMobileSidebarOpen && (
+                            <motion.div
+                                initial={{ x: '-100%' }}
+                                animate={{ x: 0 }}
+                                exit={{ x: '-100%' }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="fixed inset-0 z-[120] md:hidden bg-white dark:bg-[#0c0c0e] flex flex-col"
+                            >
+                                <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-white/5">
+                                    <div className="flex items-center gap-2">
+                                        <Brain className="w-5 h-5 text-indigo-500" />
+                                        <span className="font-bold text-lg text-gray-900 dark:text-white">Agent Insight</span>
                                     </div>
-                                    <div>
-                                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Results</p>
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-gray-500">Total datasets filtered</span>
-                                                <span className="font-semibold text-gray-900 dark:text-white">{datasets.length}</span>
-                                            </div>
-                                            {Object.entries(sourceCounts).map(([src, cnt]) => (
-                                                <div key={src} className="flex justify-between text-xs">
-                                                    <span className="text-gray-400 capitalize">{src}</span>
-                                                    <span className="text-gray-600 dark:text-gray-400">{cnt}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    {/* Agent Intelligence — Reasoning Trace */}
-                                    {goalPlan && (
-                                        <div className="space-y-3">
-                                            <div className="flex items-center gap-2">
-                                                <Brain className="w-3.5 h-3.5 text-indigo-500" />
-                                                <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Agent Thinking</p>
-                                            </div>
+                                    <button onClick={() => setIsMobileSidebarOpen(false)} className="p-2 -mr-2 text-gray-400">
+                                        <X className="w-6 h-6" />
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto w-full p-6">
+                                    {renderSidebarContent()}
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
 
-                                            {/* Objective */}
-                                            {goalPlan.objective && (
-                                                <div className="bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-2xl p-3">
-                                                    <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">Objective</p>
-                                                    <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{goalPlan.objective}</p>
-                                                </div>
-                                            )}
-
-                                            {/* Strategy Reasoning */}
-                                            {agentPerception?.strategy_reasoning && (
-                                                <div className="bg-purple-50 dark:bg-purple-500/10 border border-purple-100 dark:border-purple-500/20 rounded-2xl p-3">
-                                                    <p className="text-[10px] font-bold text-purple-500 uppercase tracking-widest mb-1">Strategy</p>
-                                                    <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{agentPerception.strategy_reasoning}</p>
-                                                </div>
-                                            )}
-
-                                            {/* Tool Pipeline with rationale */}
-                                            {goalPlan.search_strategy?.tool_priority && (
-                                                <div className="bg-gray-50 dark:bg-white/3 border border-gray-200 dark:border-white/5 rounded-2xl p-3">
-                                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Tool Pipeline</p>
-                                                    <div className="flex items-center gap-1 flex-wrap mb-2">
-                                                        {goalPlan.search_strategy.tool_priority.map((t, i) => (
-                                                            <span key={t} className="flex items-center gap-1">
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-400 font-medium">{t}</span>
-                                                                {i < (goalPlan.search_strategy?.tool_priority?.length ?? 0) - 1 && <ChevronRight className="w-2.5 h-2.5 text-gray-300" />}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                    {agentPerception?.tool_rationale && (
-                                                        <p className="text-[10px] text-gray-500 italic leading-relaxed">{agentPerception.tool_rationale}</p>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* Modality + Uncertainty badges */}
-                                            {agentPerception && (
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    {agentPerception.modality && agentPerception.modality !== 'unknown' && (
-                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 font-medium">
-                                                            {agentPerception.modality}
-                                                        </span>
-                                                    )}
-                                                    {agentPerception.domain && (
-                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-medium">
-                                                            {agentPerception.domain}
-                                                        </span>
-                                                    )}
-                                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${agentPerception.uncertainty_level === 'low'
-                                                        ? 'bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400'
-                                                        : agentPerception.uncertainty_level === 'high'
-                                                            ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400'
-                                                            : 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400'
-                                                        }`}>
-                                                        {agentPerception.uncertainty_level} uncertainty
-                                                    </span>
-                                                </div>
-                                            )}
-
-                                            {/* Constraints */}
-                                            {agentPerception?.constraints && (
-                                                <div className="space-y-1.5">
-                                                    {agentPerception.constraints.required_annotations && agentPerception.constraints.required_annotations.length > 0 && (
-                                                        <div>
-                                                            <p className="text-[10px] text-gray-400 mb-1">Required annotations</p>
-                                                            <div className="flex flex-wrap gap-1">
-                                                                {agentPerception.constraints.required_annotations.map((a, i) => (
-                                                                    <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400">{a}</span>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                    {agentPerception.constraints.preferred_format && agentPerception.constraints.preferred_format !== 'any' && (
-                                                        <p className="text-[10px] text-gray-500">Format: {agentPerception.constraints.preferred_format}</p>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* Task pills — primary + secondary */}
-                                            {agentPerception?.primary_tasks && agentPerception.primary_tasks.length > 0 && (
-                                                <div>
-                                                    <p className="text-[10px] text-gray-400 mb-1.5">Tasks</p>
-                                                    <div className="flex flex-wrap gap-1">
-                                                        {agentPerception.primary_tasks.map((t, i) => (
-                                                            <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 text-purple-600 dark:text-purple-400 font-medium">{t}</span>
-                                                        ))}
-                                                        {agentPerception.secondary_tasks?.map((t, i) => (
-                                                            <span key={`s${i}`} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-500">{t}</span>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {/* Search Variants */}
-                                            {goalPlan.search_strategy?.keyword_variants && goalPlan.search_strategy.keyword_variants.length > 0 && (
-                                                <div className="bg-gray-50 dark:bg-white/3 border border-gray-200 dark:border-white/5 rounded-2xl p-3">
-                                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Search Variants</p>
-                                                    <div className="flex flex-wrap gap-1">
-                                                        {goalPlan.search_strategy.keyword_variants.map((v, i) => (
-                                                            <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-400">{v}</span>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {/* Risk Notes */}
-                                            {agentPerception?.risk_notes && agentPerception.risk_notes.length > 0 && (
-                                                <div className="space-y-1">
-                                                    {agentPerception.risk_notes.map((note, i) => (
-                                                        <div key={i} className="flex items-start gap-1.5">
-                                                            <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5 shrink-0" />
-                                                            <p className="text-[10px] text-gray-500 dark:text-gray-500 leading-relaxed">{note}</p>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {/* Self-Adjustment Messages */}
-                                    {agentReport?.evaluation?.self_adjustment && agentReport.evaluation.self_adjustment.length > 0 && (
-                                        <div className="space-y-2">
-                                            <div className="flex items-center gap-2">
-                                                <Zap className="w-3.5 h-3.5 text-amber-500" />
-                                                <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Agent Adjustments</p>
-                                            </div>
-                                            {agentReport.evaluation.self_adjustment.map((msg, i) => (
-                                                <div key={i} className="bg-amber-50 dark:bg-amber-500/5 border border-amber-200 dark:border-amber-500/15 rounded-2xl p-3">
-                                                    <p className="text-[10px] text-amber-700 dark:text-amber-400 leading-relaxed">{msg}</p>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {/* Uncertainty Report */}
-                                    {agentReport?.uncertainty && (
-                                        <div className="space-y-2">
-                                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Confidence</p>
-                                            <div className={`rounded-2xl p-3 text-xs leading-relaxed border ${agentReport.uncertainty.quality_label === 'strong'
-                                                ? 'bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-700 dark:text-green-400'
-                                                : agentReport.uncertainty.quality_label === 'adequate'
-                                                    ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20 text-amber-700 dark:text-amber-400'
-                                                    : 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-700 dark:text-red-400'
-                                                }`}>
-                                                {agentReport.uncertainty.overall}
-                                            </div>
-                                            {agentReport.uncertainty.known_gaps && agentReport.uncertainty.known_gaps.length > 0 && (
-                                                <div className="space-y-1">
-                                                    {agentReport.uncertainty.known_gaps.map((gap, i) => (
-                                                        <p key={i} className="text-[10px] text-gray-500 dark:text-gray-500 leading-relaxed"> {gap}</p>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {apiError && (
-                                        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl p-3">
-                                            <p className="text-xs text-red-600 dark:text-red-400 font-medium">Backend Error</p>
-                                            <p className="text-xs text-red-500 mt-1">{apiError}</p>
-                                        </div>
-                                    )}
-                                    {status && !apiError && (
-                                        <div className="bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 rounded-2xl p-3">
-                                            <p className="text-xs text-green-600 dark:text-green-400">{status}</p>
-                                        </div>
-                                    )}
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
+                    {/* LEFT SIDEBAR */}
+                    <div className="w-72 border-r border-gray-200 dark:border-white/5 shrink-0 hidden md:flex flex-col p-5 gap-6 overflow-y-auto">
+                        {renderSidebarContent()}
                     </div>
 
                     {/* RIGHT CONTENT */}
@@ -1198,7 +1338,7 @@ function SearchResultsContent() {
                                                                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{practicalDatasets.length} Candidates</span>
                                                                 </div>
                                                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                                                    {practicalDatasets.slice(0, 15).map((ds) => (
+                                                                    {practicalDatasets.map((ds) => (
                                                                         <DatasetCard key={ds.id} ds={ds} onClick={() => setSelectedDataset(ds)} />
                                                                     ))}
                                                                 </div>

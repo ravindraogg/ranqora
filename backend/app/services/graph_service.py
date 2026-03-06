@@ -1,4 +1,5 @@
 import logging
+import threading
 import math
 import networkx as nx
 from typing import List, Dict, Any
@@ -48,13 +49,19 @@ class GraphService:
             "CREATE CONSTRAINT IF NOT EXISTS FOR (d:Dataset) REQUIRE d.id IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (q:Query) REQUIRE q.text IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Paper) REQUIRE p.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (t:Task) REQUIRE t.name IS UNIQUE"
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (t:Task) REQUIRE t.name IS UNIQUE",
+            # Drop old index if exists and recreate with correct dimension (384)
+            "DROP INDEX dataset_vector_index IF EXISTS",
+            "CREATE VECTOR INDEX dataset_vector_index IF NOT EXISTS FOR (d:Dataset) ON (d.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 384, `vector.similarity_function`: 'cosine'}}"
         ]
         with self.driver.session() as session:
             for q in queries:
-                session.run(q)
+                try:
+                    session.run(q)
+                except Exception as e:
+                    logger.warning(f"Schema query failed (non-fatal): {q} - {e}")
 
-    def ingest_candidates(self, query: str, tasks: List[str] | None, candidates: List[Dict[str, Any]]):
+    def ingest_candidates(self, query: str, tasks: List[str] | None, candidates: List[Dict[str, Any]], domain: str | None = None, stop_event: threading.Event | None = None):
         """
         Ingest the retrieved targets into Neo4j graph.
         Links Datasets to the Query, extracted Tasks, and dynamically creates Paper nodes from ArXiv.
@@ -123,13 +130,22 @@ class GraphService:
                     "source": source,
                     "downloads": cand.get("downloads", 0),
                     "likes": cand.get("likes", 0),
-                    "tags": tags
+                    "tags": tags,
+                    "score": cand.get("similarity_score", 0)
                 })
+
+        if stop_event and stop_event.is_set():
+            logger.info("Graph ingestion aborted via stop_event.")
+            return
 
         with self.driver.session() as session:
             try:
-                # 1. Upsert Query & Tasks
-                session.run("MERGE (q:Query {text: $query_text})", query_text=query)
+                # 1. Upsert Query & Tasks (Fix 4: Add q.domain)
+                session.run(
+                    "MERGE (q:Query {text: $query_text}) SET q.domain = $domain", 
+                    query_text=query,
+                    domain=domain or (tasks[0] if tasks else "general")
+                )
                 if tasks:
                     session.run("""
                         MATCH (q:Query {text: $query_text})
@@ -153,7 +169,7 @@ class GraphService:
                         MERGE (p)-[:CITES_DATASET]->(d)
                     """, batch=papers_batch, query_text=query)
 
-                # 3. Batch Practical Dataset Ingestion
+                # 3. Batch Practical Dataset Ingestion (Fix 3: Add SUCCESSFUL_RECO properly)
                 if datasets_batch:
                     session.run("""
                         UNWIND $batch AS d_data
@@ -165,6 +181,8 @@ class GraphService:
                         WITH d, d_data
                         MATCH (q:Query {text: $query_text})
                         MERGE (q)-[:RETRIEVED]->(d)
+                        MERGE (q)-[r:SUCCESSFUL_RECO]->(d)
+                        SET r.relevance_at_time = d_data.score
                         WITH d, d_data
                         UNWIND d_data.tags AS tag
                         MERGE (t:Task {name: toLower(tag)})
@@ -283,6 +301,55 @@ class GraphService:
                 scores[ds_id] = min(max(raw_g, 0.0), 1.0)
                 
         return scores
+
+    def record_successful_discovery(self, query: str, dataset_id: str, score: float = 0.85):
+        """
+        Fix 7: Persist successful results in the graph.
+        Links a query to a dataset with a SUCCESSFUL_RECO relationship.
+        """
+        if not self._ensure_driver():
+            return
+            
+        with self.driver.session() as session:
+            try:
+                session.run("""
+                    MERGE (q:Query {text: $query_text})
+                    MERGE (d:Dataset {id: $dataset_id})
+                    MERGE (q)-[r:SUCCESSFUL_RECO]->(d)
+                    SET r.score = $score, r.timestamp = datetime()
+                """, query_text=query, dataset_id=dataset_id, score=score)
+            except Exception as e:
+                logger.error(f"Failed to record successful discovery in Neo4j: {e}")
+
+    def vector_search(self, embedding: List[float], top_k: int = 20) -> List[Dict[str, Any]]:
+        """
+        Fix 1: Embedding-based nearest neighbor search in Neo4j.
+        Used for Query Expansion.
+        """
+        if not self._ensure_driver():
+            return []
+            
+        results = []
+        with self.driver.session() as session:
+            try:
+                # Use the vector index we created in _init_schema
+                res = session.run("""
+                    CALL db.index.vector.queryNodes('dataset_vector_index', $top_k, $emb)
+                    YIELD node, score
+                    RETURN node.id AS id, node.source AS source, labels(node) AS labels, score
+                """, emb=embedding, top_k=top_k)
+                
+                for record in res:
+                    results.append({
+                        "id": record["id"],
+                        "source": record["source"],
+                        "labels": record["labels"],
+                        "score": record["score"]
+                    })
+            except Exception as e:
+                logger.warning(f"Vector search failed (likely index not ready or unsupported): {e}")
+                
+        return results
 
 # Module singleton
 graph_service = GraphService()

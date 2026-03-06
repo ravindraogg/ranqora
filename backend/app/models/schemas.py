@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+from pydantic import BaseModel, field_validator
+from typing import List, Optional, Dict, Union
 
 
 # ─── Request Models ──────────────────────────────────────────────
@@ -19,6 +19,13 @@ class FeedbackEvent(BaseModel):
 
 # ─── Response Models ─────────────────────────────────────────────
 
+class Explanation(BaseModel):
+    why_relevant: Optional[str] = None
+    license_note: Optional[str] = None
+    tradeoff: Optional[str] = None
+    confidence: Optional[str] = None
+
+
 class DatasetMetadata(BaseModel):
     id: str
     source: str = "huggingface"
@@ -31,15 +38,24 @@ class DatasetMetadata(BaseModel):
     tags: List[str] = []
     similarity_score: float = 0.0
     ranking_breakdown: Optional[Dict[str, float]] = None
+    explanation: Optional[Explanation] = None
     
     # ── Category & Research Metadata ──
     dataset_category: str = "practical"  # practical | research_benchmark
+    is_paper_seed: bool = False
     paper_title: Optional[str] = None
     paper_url: Optional[str] = None
     benchmark_task: Optional[str] = None
     year: Optional[str] = None
     citations: Optional[int] = 0
     paper_source: Optional[str] = None  # ieee | arxiv | semantic_scholar
+    
+    @field_validator("year", mode="before")
+    @classmethod
+    def validate_year(cls, v):
+        if v is None:
+            return None
+        return str(v)
     
     # ── Advanced Metadata (Point 4 & UI Improvements) ──
     temporal_pairs: bool = False

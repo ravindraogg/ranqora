@@ -32,6 +32,7 @@ class RetrievalOrchestrator:
     async def retrieve(
         self,
         query: str,
+        request = None, # Fix: Track disconnection
         domain: str | None = None,
         tasks: list[str] | None = None,
         modality: str | None = None,
@@ -57,12 +58,13 @@ class RetrievalOrchestrator:
             limits:           Per-tool fetch limits.
             emit:             Optional async SSE callback.
         """
-        api_query = search_query or " ".join(query.split()[:4])
+        api_query = search_query[:60] or re.sub(r'[^\w\s]', '', query).strip()[:60]
         variants = list(keyword_variants or [])
 
         # Delegate to the Discovery Agent
         agent_result = await discovery_agent.discover(
             query=query,
+            request=request, # Forward for abortion checks
             domain=domain or "general",
             tasks=tasks or [],
             modality=modality or "any",

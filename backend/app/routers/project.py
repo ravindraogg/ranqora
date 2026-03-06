@@ -23,6 +23,7 @@ from app.services.agents.evaluator import agent_evaluator
 from app.services.agents.memory_store import memory_store
 from app.config import TOP_K_RESULTS
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,18 @@ async def rank_stream(context: ProjectContext, request: Request):
     """
     loop = asyncio.get_event_loop()
 
+    stop_event = threading.Event()
+
     async def generate():
+        async def check_disconnection():
+            if await request.is_disconnected():
+                logger.info(f"Client disconnected: Aborting dataset search for '{context.query[:40]}'")
+                stop_event.set() # Fix: Kill background threads
+                raise asyncio.CancelledError()
+
         try:
             # ── AUTH ──────────────────────────────────────────────
+            await check_disconnection()
             auth_service.validate_client(context.client_id, request.client.host)
 
             # ── CHECK FULL RESPONSE CACHE ─────────────────────────
@@ -70,9 +80,11 @@ async def rank_stream(context: ProjectContext, request: Request):
                 return
 
             # ── STAGE 0: Unified LLM parse + plan (1 Gemini call) ─
+            await check_disconnection()
             yield _sse({"stage": 0, "text": "Parsing query intent & building goal plan..."})
 
             llm_plan = await llm_service.parse_and_plan(context.query)
+            await check_disconnection()
 
             effective_domain = context.domain or llm_plan.get("domain", "general")
             effective_tasks = list(set((context.tasks or []) + llm_plan.get("tasks", [])))
@@ -119,15 +131,18 @@ async def rank_stream(context: ProjectContext, request: Request):
                 # We can't yield from inside a callback, so we collect events
                 pass  # Events are emitted by the agent's own logging
 
+            await check_disconnection()
             yield _sse({"stage": 1, "text": f"Agent starting discovery: '{search_query}'..."})
             retrieval_result = await orchestrator.retrieve(
                 query=context.query,
+                request=request, # Track disconnection
                 domain=effective_domain,
                 tasks=effective_tasks,
                 search_query=search_query,
                 keyword_variants=keyword_variants,
                 tool_priority=tool_priority,
             )
+            await check_disconnection()
             candidates = retrieval_result["candidates"]
             agent_memory = retrieval_result.get("agent_memory")
 
@@ -162,6 +177,7 @@ async def rank_stream(context: ProjectContext, request: Request):
                 return
 
             # ── STAGE 2: Neo4j graph ingestion ────────────────────
+            await check_disconnection()
             yield _sse({"stage": 2, "text": f"Ingesting {len(candidates)} candidates into knowledge graph..."})
             await loop.run_in_executor(
                 None,
@@ -169,10 +185,13 @@ async def rank_stream(context: ProjectContext, request: Request):
                     query=context.query,
                     tasks=context.tasks,
                     candidates=candidates,
+                    domain=effective_domain,
+                    stop_event=stop_event, # Cancellation support
                 )
             )
 
             # ── STAGE 3: LambdaRank scoring ───────────────────────
+            await check_disconnection()
             yield _sse({"stage": 3, "text": "Running LightGBM LambdaRank relevance scoring..."})
             ranked_semantic = await loop.run_in_executor(
                 None,
@@ -184,10 +203,25 @@ async def rank_stream(context: ProjectContext, request: Request):
                     keyword_variants=keyword_variants,
                     anti_keywords=anti_keywords,
                     top_k=40,  # Get top 40 for LLM re-ranking
+                    stop_event=stop_event, # Cancellation support
                 )
             )
             
+            # Post-Ranking Update: Re-ingest top with scores for SUCCESSFUL_RECO
+            if ranked_semantic:
+                await loop.run_in_executor(
+                    None,
+                    lambda: graph_service.ingest_candidates(
+                        query=context.query,
+                        tasks=context.tasks,
+                        candidates=ranked_semantic[:20],
+                        domain=effective_domain,
+                        stop_event=stop_event,
+                    )
+                )
+            
             # Point 10: Deep LLM Re-Ranking (Top 40 -> Top 20)
+            await check_disconnection()
             yield _sse({"stage": 3.5, "text": "Performing deep agent re-ranking with Gemini..."})
             ranked = await llm_service.rank_with_llm(
                 query=context.query,
@@ -195,44 +229,64 @@ async def rank_stream(context: ProjectContext, request: Request):
                 top_k=25  # Extract top 25 high-quality candidates
             )
             
-            # Apply categorization
+            # Apply categorization: Academic sources -> Research, Platforms -> Practical (Fix per user)
             all_practical = []
             all_research = []
+            academic_sources = ["ieee", "arxiv", "semantic_scholar", "semanticscholar"]
+            
             for ds in ranked:
-                if ds.get("is_paper_seed") or ds.get("paper_source") or ds.get("source", "").lower() == "arxiv":
+                # Use platform source for top-level division 
+                src = ds.get("source", "").lower()
+                if src in academic_sources:
                     ds["dataset_category"] = "research_benchmark"
                     all_research.append(ds)
                 else:
                     ds["dataset_category"] = "practical"
                     all_practical.append(ds)
             
-            # Slice according to limits: 15 practical, 5 research (3 ieee, 1 arxiv, 1 s2)
-            practical_ranked = all_practical[:15]
+            # Slice according to limits: 25 practical, 5 research (3 ieee, 1 arxiv, 1 s2)
+            practical_ranked = all_practical[:25]
             
             research_ranked = []
             ieee_count, arxiv_count, s2_count = 0, 0, 0
+            seen_research_ids = set()
             remaining_research = []
+            
             for ds in all_research:
-                src = ds.get("paper_source", "arxiv")
+                ds_id = ds.get("id")
+                if ds_id in seen_research_ids:
+                    continue
+                
+                # Priority source check
+                src = (ds.get("paper_source") or ds.get("source", "")).lower()
+                
                 if src == "ieee" and ieee_count < 3:
                     research_ranked.append(ds)
                     ieee_count += 1
-                elif src == "arxiv" and arxiv_count < 1:
+                    seen_research_ids.add(ds_id)
+                elif (src == "arxiv") and arxiv_count < 1:
                     research_ranked.append(ds)
                     arxiv_count += 1
-                elif src == "semantic_scholar" and s2_count < 1:
+                    seen_research_ids.add(ds_id)
+                elif (src in ["semantic_scholar", "semanticscholar"]) and s2_count < 1:
                     research_ranked.append(ds)
                     s2_count += 1
+                    seen_research_ids.add(ds_id)
                 else:
                     remaining_research.append(ds)
             
-            # Fill up to 5 if deficient
-            while len(research_ranked) < 5 and remaining_research:
-                research_ranked.append(remaining_research.pop(0))
+            # Fill up to 5 if deficient, ensuring no duplicates
+            for ds in remaining_research:
+                if len(research_ranked) >= 5:
+                    break
+                if ds.get("id") not in seen_research_ids:
+                    research_ranked.append(ds)
+                    seen_research_ids.add(ds.get("id"))
                 
             ranked = practical_ranked + research_ranked
 
             # ── STAGE 4: Evaluation + Explanations (1 Gemini call) ─
+            await check_disconnection()
             yield _sse({"stage": 4, "text": "Evaluating result quality & generating explanations..."})
 
             # Deterministic evaluation with self-adjustment (no LLM)
@@ -311,7 +365,9 @@ async def rank_stream(context: ProjectContext, request: Request):
 
         except asyncio.CancelledError:
             logger.info("SSE stream cancelled by client/server shutdown.")
+            stop_event.set()
         except GeneratorExit:
+            stop_event.set()
             pass
         except HTTPException as e:
             yield _sse({"error": e.detail, "status_code": e.status_code})
