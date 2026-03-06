@@ -37,7 +37,7 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "datasetgraph")
 
 # ─── CORS Origins (restrict in production) ──────────────────────
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://ranqora.vercel.app").split(",")
 
 # ─── Rate Limiting ──────────────────────────────────────────────
 # Max requests per IP per minute (0 = disabled)

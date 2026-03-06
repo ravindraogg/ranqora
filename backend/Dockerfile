@@ -47,6 +47,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:7860/ || exit 1
 
 # ── Start server ─────────────────────────────────────────────────────────────
-# HuggingFace Spaces: must listen on 0.0.0.0:7860
-# Workers=1 because embedding model is loaded per-process (shared memory)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$PORT", "--workers", "1", "--timeout-keep-alive","130"]
+# Render/HuggingFace: must listen on 0.0.0.0 and use the dynamic $PORT
+# Use string format (not list) so the shell expands $PORT
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 130 --proxy-headers
