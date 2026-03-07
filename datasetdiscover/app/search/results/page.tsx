@@ -1436,7 +1436,7 @@ function SearchResultsContent() {
                                                     <div className="pt-2">
                                                         <h4 className="text-xs font-bold text-indigo-500 uppercase tracking-widest mb-6 flex items-center gap-2">
                                                             <Search className="w-3.5 h-3.5" />
-                                                            Filtered Results for &quot;{filterText}&quot; ({filteredDatasets.length})
+                                                            Filtered Results for &quot;{filterText.replace('_', ' ')}&quot; ({filteredDatasets.length})
                                                         </h4>
                                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                                             {filteredDatasets.map((ds) => (
