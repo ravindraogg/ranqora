@@ -105,7 +105,7 @@ export default function SearchDashboard() {
                     >
                         search.<br />discover.
                     </h2>
-                    <p className="mt-5 text-base md:text-lg text-gray-500 dark:text-gray-400 max-w-md">
+                    <p className="mt-5 mb-10 text-base md:text-lg text-gray-500 dark:text-gray-400 max-w-md">
                         Describe your project. Ranqora analyzes context and ranks the most relevant datasets using semantic and graph intelligence.
                     </p>
                 </motion.div>
