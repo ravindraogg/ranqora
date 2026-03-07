@@ -87,7 +87,7 @@ export default function SearchDashboard() {
             </div>
 
             {/* Main Layout: Now using flex-row for side-by-side positioning */}
-            <div className="flex-1 flex flex-col lg:flex-row items-center justify-between px-6 md:px-12 lg:px-20 pt-28 md:pt-32 pb-12 gap-8 md:gap-12 max-w-[1600px] mx-auto w-full">
+            <div className="flex-1 flex flex-col lg:flex-row items-center justify-between px-6 md:px-12 lg:px-32 pt-28 md:pt-32 pb-12 gap-16 lg:gap-24 max-w-[1600px] mx-auto w-full">
 
                 {/* LEFT: Hero text section */}
                 <motion.div
