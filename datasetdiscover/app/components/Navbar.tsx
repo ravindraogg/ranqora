@@ -2,201 +2,174 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X, Hexagon, Moon, Sun, ChevronDown, Database, Zap, FileText, Brain, Globe, Code, Shield, CheckCircle2 } from 'lucide-react';
-import { motion, AnimatePresence, useScroll, useSpring } from 'framer-motion';
+import { Menu, X, Hexagon, Moon, Sun, ChevronDown, Database, Zap, FileText, Brain, Globe, Code, Shield, CheckCircle2, Search } from 'lucide-react';
+import { motion, AnimatePresence, useScroll, useSpring, useTransform } from 'framer-motion';
 import { useTheme } from 'next-themes';
+import { cn } from '../lib/utils';
+
+
 
 const tools = [
-    { name: 'Kaggle', icon: Database, color: 'text-blue-500', href: '#tools' },
-    { name: 'HuggingFace', icon: Zap, color: 'text-yellow-500', href: '#tools' },
-    { name: 'ArXiv', icon: FileText, color: 'text-red-500', href: '#tools' },
-    { name: 'IEEE Xplore', icon: Shield, color: 'text-indigo-500', href: '#tools' },
-    { name: 'Semantic Scholar', icon: Brain, color: 'text-cyan-500', href: '#tools' },
-    { name: 'OpenDataPortal', icon: Globe, color: 'text-emerald-500', href: '#tools' },
-    { name: 'GitHub', icon: Code, color: 'text-gray-500', href: '#tools' },
+    { name: 'Kaggle', icon: Database, color: 'text-blue-500', bgColor: 'bg-blue-500/10', href: '#tools' },
+    { name: 'HuggingFace', icon: Zap, color: 'text-yellow-500', bgColor: 'bg-yellow-500/10', href: '#tools' },
+    { name: 'ArXiv', icon: FileText, color: 'text-red-500', bgColor: 'bg-red-500/10', href: '#tools' },
+    { name: 'IEEE Xplore', icon: Shield, color: 'text-indigo-500', bgColor: 'bg-indigo-500/10', href: '#tools' },
+    { name: 'Semantic Scholar', icon: Brain, color: 'text-cyan-500', bgColor: 'bg-cyan-500/10', href: '#tools' },
+    { name: 'OpenDataPortal', icon: Globe, color: 'text-emerald-500', bgColor: 'bg-emerald-500/10', href: '#tools' },
+    { name: 'GitHub', icon: Code, color: 'text-gray-500', bgColor: 'bg-gray-500/10', href: '#tools' },
 ];
 
 export function Navbar() {
     const [isOpen, setIsOpen] = useState(false);
-    const [isToolsOpen, setIsToolsOpen] = useState(false);
+
     const { theme, setTheme } = useTheme();
     const [mounted, setMounted] = useState(false);
 
-    // Track scroll for the glowing border
-    const { scrollYProgress } = useScroll();
-    const pathLength = useSpring(scrollYProgress, {
-        stiffness: 100,
-        damping: 30,
-        restDelta: 0.001
-    });
+    const { scrollY } = useScroll();
+    const scrollSpring = useSpring(scrollY, { stiffness: 400, damping: 90 });
+
+    // Transform values for a "shrinking" and "glass" effect on scroll
+    const navScale = useTransform(scrollSpring, [0, 100], [1, 0.98]);
+    const navOpacity = useTransform(scrollSpring, [0, 100], [1, 0.95]);
 
     useEffect(() => {
         setMounted(true);
     }, []);
 
+    if (!mounted) return null;
+
     return (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 w-full max-w-5xl px-4 z-50">
-            <div className="relative flex items-center justify-between gap-2 md:gap-4 p-1">
+        <motion.nav
+            style={{ scale: navScale, opacity: navOpacity }}
+            className="fixed top-6 left-0 right-0 z-50 flex justify-center px-4"
+        >
+            <div className="w-full max-w-5xl flex items-center justify-between gap-2 md:gap-4 p-1">
 
-
-                {/* Card 1: Logo */}
-                <div className="h-14 px-6 flex items-center justify-center rounded-full border border-gray-200/40 bg-white/70 dark:bg-black/70 dark:border-white/10 backdrop-blur-md shadow-lg shrink-0">
-                    <Link href="/" className="flex items-center gap-2">
-                        <Hexagon className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-                        <span className="font-bold text-lg tracking-tight text-gray-900 dark:text-white flex items-baseline gap-1.5">
+                {/* Section 1: Brand Logo */}
+                <motion.div
+                    initial={{ x: -20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    className="h-14 px-5 flex items-center gap-3 rounded-full border border-gray-200/40 dark:border-white/5 bg-white/70 dark:bg-black/70 backdrop-blur-xl shadow-lg shrink-0"
+                >
+                    <Link href="/" className="flex items-center gap-2 group">
+                        <div className="relative">
+                            <Hexagon className="w-6 h-6 text-indigo-600 dark:text-indigo-400 group-hover:rotate-12 transition-transform duration-300" />
+                            <div className="absolute inset-0 bg-indigo-500/20 blur-lg rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                        <span className="font-bold text-lg tracking-tight text-gray-900 dark:text-white">
                             Ranqora
                         </span>
                     </Link>
-                </div>
+                </motion.div>
 
-                {/* Card 2: Nav Links */}
-                <div className="relative hidden md:flex flex-1 h-14 px-8 items-center justify-center space-x-8 rounded-full border border-gray-200/40 bg-white/70 dark:bg-black/70 dark:border-white/10 backdrop-blur-md shadow-lg">
-                    {/* Animated Glowing Perimeter Border for Card 2 */}
-                    <div className="absolute inset-0 pointer-events-none rounded-full overflow-hidden z-[-1]">
-                        <svg className="w-full h-full" width="100%" height="100%">
-                            <motion.rect
-                                x="1" y="1"
-                                rx="28" ry="28"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                className="text-indigo-500/30"
-                                style={{
-                                    width: 'calc(100% - 2px)',
-                                    height: 'calc(100% - 2px)',
-                                    pathLength,
-                                    filter: 'drop-shadow(0 0 8px rgba(99,102,241,0.5))'
-                                }}
-                            />
-                        </svg>
-                    </div>
-
-                    <Link href="#features" className="text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors">
+                {/* Section 2: Core Navigation */}
+                <motion.div
+                    initial={{ y: -20, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    className="hidden md:flex flex-1 h-14 items-center justify-center gap-8 rounded-full border border-gray-200/40 dark:border-white/5 bg-white/70 dark:bg-black/70 backdrop-blur-xl shadow-lg px-8 relative overflow-hidden"
+                >
+                    <Link href="#features" className="text-sm font-semibold text-gray-500 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-white transition-all">
                         Features
                     </Link>
 
-                    {/* Tools Dropdown */}
-                    <div
-                        className="relative"
-                        onMouseEnter={() => setIsToolsOpen(true)}
-                        onMouseLeave={() => setIsToolsOpen(false)}
-                    >
-                        <button className="flex items-center gap-1 text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors py-4">
-                            Tools
-                            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isToolsOpen ? 'rotate-180' : ''}`} />
-                        </button>
+                    <Link href="#tools" className="text-sm font-semibold text-gray-500 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-white transition-all">
+                        Tools
+                    </Link>
 
-                        <AnimatePresence>
-                            {isToolsOpen && (
-                                <motion.div
-                                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    className="absolute top-full left-1/2 -translate-x-1/2 w-64 mt-1 p-2 rounded-3xl bg-white/95 dark:bg-black/95 backdrop-blur-xl border border-gray-200/40 dark:border-white/10 shadow-2xl overflow-hidden"
-                                >
-                                    <div className="grid grid-cols-1 gap-1">
-                                        {tools.map((tool) => (
-                                            <Link
-                                                key={tool.name}
-                                                href={tool.href}
-                                                className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gray-50 dark:hover:bg-white/5 transition-colors group"
-                                            >
-                                                <div className={`w-8 h-8 rounded-xl bg-gray-100 dark:bg-white/5 flex items-center justify-center ${tool.color} group-hover:scale-110 transition-transform`}>
-                                                    <tool.icon className="w-4 h-4" />
-                                                </div>
-                                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
-                                                    {tool.name}
-                                                </span>
-                                            </Link>
-                                        ))}
-                                    </div>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
-                    </div>
 
-                    <Link href="#steps" className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500" />
+
+                    <Link href="#steps" className="flex items-center gap-1.5 text-sm font-semibold text-gray-500 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-white transition-all">
+                        <CheckCircle2 className="w-4 h-4 text-indigo-500" />
                         Steps
                     </Link>
-                </div>
+                </motion.div>
 
-                {/* Card 3: Theme Toggle & Get Started */}
-                <div className="flex items-center gap-2 shrink-0">
+                {/* Section 3: Utilities & Action */}
+                <motion.div
+                    initial={{ x: 20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    className="flex items-center gap-2"
+                >
                     <button
                         onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                        className="h-14 w-14 flex items-center justify-center rounded-full border border-gray-200/40 bg-white/70 dark:bg-black/70 dark:border-white/10 backdrop-blur-md shadow-lg text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                        className="h-14 w-14 flex items-center justify-center rounded-full border border-gray-200/40 dark:border-white/5 bg-white/70 dark:bg-black/70 backdrop-blur-xl shadow-lg transition-all hover:scale-105 active:scale-95 text-gray-600 dark:text-gray-300"
                     >
-                        {mounted ? (
-                            theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />
-                        ) : (
-                            <div className="h-5 w-5" />
-                        )}
-                        <span className="sr-only">Toggle theme</span>
+                        {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
                     </button>
 
                     <Link
                         href="/search"
-                        className="hidden sm:flex h-14 px-8 items-center justify-center rounded-full bg-gray-900 text-white dark:bg-white dark:text-black text-sm font-bold hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors shadow-lg shadow-gray-900/20 dark:shadow-white/20"
+                        className="hidden sm:flex h-14 px-8 items-center justify-center rounded-full bg-gray-900 text-white dark:bg-white dark:text-black text-sm font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg gap-2 group"
                     >
+                        <Search className="w-4 h-4 group-hover:rotate-12 transition-transform" />
                         Get Started
                     </Link>
 
                     <button
                         onClick={() => setIsOpen(!isOpen)}
-                        className="md:hidden h-14 w-14 flex items-center justify-center rounded-full border border-gray-200/40 bg-white/70 dark:bg-black/70 dark:border-white/10 backdrop-blur-md shadow-lg text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+                        className="md:hidden h-14 w-14 flex items-center justify-center rounded-full border border-gray-200/40 dark:border-white/5 bg-white/70 dark:bg-black/70 backdrop-blur-xl shadow-lg text-gray-600 dark:text-gray-300"
                     >
-                        <span className="sr-only">Open main menu</span>
                         {isOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
                     </button>
-                </div>
+                </motion.div>
+
             </div>
 
+            {/* Mobile Navigation Mesh Overlay */}
             <AnimatePresence>
                 {isOpen && (
                     <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        className="md:hidden mt-4 rounded-[2.5rem] bg-white/95 dark:bg-black/95 backdrop-blur-xl border border-gray-200/40 dark:border-white/10 shadow-xl overflow-hidden"
+                        initial={{ opacity: 0, scale: 0.98, y: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.98, y: 10 }}
+                        className="absolute top-24 left-4 right-4 p-6 rounded-[2.5rem] bg-white/95 dark:bg-zinc-950/95 backdrop-blur-3xl border border-gray-200/40 dark:border-white/5 shadow-2xl md:hidden z-10"
                     >
-                        <div className="px-4 py-6 space-y-2">
-                            <Link href="#features" onClick={() => setIsOpen(false)} className="flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors">
-                                <Hexagon className="w-5 h-5 text-indigo-500" />
-                                Features
-                            </Link>
+                        <div className="space-y-6">
+                            <div className="grid grid-cols-1 gap-2">
+                                <MobileNavItem href="#features" icon={Hexagon} label="Features" onClick={() => setIsOpen(false)} />
+                                <MobileNavItem href="#steps" icon={CheckCircle2} label="Steps" onClick={() => setIsOpen(false)} />
+                            </div>
 
-                            <div className="px-4 py-2">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3 ml-1">Tools</p>
+                            <div className="pt-4 space-y-4">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] px-4">Cloud Integrations</p>
                                 <div className="grid grid-cols-2 gap-2">
-                                    {tools.map((tool) => (
-                                        <Link
-                                            key={tool.name}
-                                            href={tool.href}
-                                            onClick={() => setIsOpen(false)}
-                                            className="flex items-center gap-2 p-2 rounded-xl bg-gray-50 dark:bg-white/5 text-sm text-gray-600 dark:text-gray-400"
-                                        >
-                                            <tool.icon className={`w-3.5 h-3.5 ${tool.color}`} />
-                                            {tool.name}
+                                    {tools.slice(0, 4).map((tool) => (
+                                        <Link key={tool.name} href={tool.href} onClick={() => setIsOpen(false)} className="flex items-center gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-white/5">
+                                            <tool.icon className={cn("w-4 h-4", tool.color)} />
+                                            <span className="text-sm font-bold text-gray-700 dark:text-gray-300">{tool.name}</span>
                                         </Link>
                                     ))}
                                 </div>
                             </div>
 
-                            <Link href="#steps" onClick={() => setIsOpen(false)} className="flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors">
-                                <CheckCircle2 className="w-5 h-5 text-indigo-500" />
-                                Steps
-                            </Link>
 
-                            <div className="pt-4 px-4">
-                                <Link href="/search" onClick={() => setIsOpen(false)} className="flex items-center justify-center px-4 py-4 w-full bg-gray-900 dark:bg-white text-white dark:text-black rounded-2xl text-base font-bold shadow-lg shadow-indigo-500/10">
-                                    Get Started
-                                </Link>
-                            </div>
+
+                            <Link
+                                href="/search"
+                                onClick={() => setIsOpen(false)}
+                                className="flex items-center justify-center h-16 w-full bg-gray-900 dark:bg-white text-white dark:text-black rounded-3xl font-bold text-lg shadow-xl"
+                            >
+                                Launch Platform
+                            </Link>
                         </div>
                     </motion.div>
                 )}
             </AnimatePresence>
-        </div>
+        </motion.nav>
+    );
+}
+
+function MobileNavItem({ href, icon: Icon, label, onClick }: any) {
+    return (
+        <Link
+            href={href}
+            onClick={onClick}
+            className="flex items-center gap-4 px-5 py-4 rounded-2xl bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+        >
+            <div className="p-2 rounded-xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-white/10">
+                <Icon className="w-5 h-5 text-indigo-500" />
+            </div>
+            <span className="text-base font-bold text-gray-900 dark:text-gray-100">{label}</span>
+        </Link>
     );
 }

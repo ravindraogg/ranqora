@@ -54,9 +54,10 @@ export function Features() {
                         {features.map((feature, idx) => (
                             <motion.div
                                 key={feature.name}
-                                className="flex flex-col"
+                                className="flex flex-col group cursor-pointer"
                                 initial={{ opacity: 0, y: 20 }}
                                 whileInView={{ opacity: 1, y: 0 }}
+                                whileHover={{ rotate: 10 }}
                                 viewport={{ once: true }}
                                 transition={{ duration: 0.5, delay: idx * 0.1 }}
                             >

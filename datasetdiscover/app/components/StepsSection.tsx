@@ -61,11 +61,12 @@ export function StepsSection() {
                             key={step.title}
                             initial={{ opacity: 0, scale: 0.95 }}
                             whileInView={{ opacity: 1, scale: 1 }}
+                            whileHover={{ rotate: 10 }}
                             viewport={{ once: true }}
                             transition={{ delay: idx * 0.1 }}
-                            className="relative p-8 rounded-[2.5rem] bg-white dark:bg-black border border-gray-200 dark:border-white/5 shadow-sm group hover:border-indigo-500/30 transition-all"
+                            className="relative p-8 rounded-[2.5rem] bg-white dark:bg-black border border-gray-200 dark:border-white/5 shadow-sm group hover:border-indigo-500/30 transition-all cursor-pointer"
                         >
-                            <div className="absolute top-8 right-8 text-4xl font-black text-gray-100 dark:text-white/5 group-hover:text-indigo-500/10 transition-colors">
+                            <div className="absolute top-8 right-8 text-4xl font-black text-[#4F39F6] opacity-60 transition-colors">
                                 0{idx + 1}
                             </div>
                             <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 mb-6 group-hover:bg-indigo-600 group-hover:text-white transition-all">

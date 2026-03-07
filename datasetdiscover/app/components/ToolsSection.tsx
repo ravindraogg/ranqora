@@ -33,8 +33,8 @@ export function ToolsSection() {
                             whileInView={{ opacity: 1, y: 0 }}
                             viewport={{ once: true }}
                             transition={{ delay: idx * 0.1 }}
-                            whileHover={{ y: -5 }}
-                            className="p-6 rounded-[2rem] border border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-zinc-900/50 flex flex-col items-center text-center gap-4 transition-all hover:shadow-xl hover:shadow-indigo-500/5 hover:border-indigo-500/20"
+                            whileHover={{ rotate: 10 }}
+                            className="p-6 rounded-[2rem] border border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-zinc-900/50 flex flex-col items-center text-center gap-4 transition-all hover:shadow-xl hover:shadow-indigo-500/5 hover:border-indigo-500/20 cursor-pointer"
                         >
                             <div className={`w-12 h-12 rounded-2xl ${tool.bg} flex items-center justify-center ${tool.color}`}>
                                 <tool.icon className="w-6 h-6" />

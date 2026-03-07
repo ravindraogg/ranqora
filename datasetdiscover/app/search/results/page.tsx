@@ -125,13 +125,15 @@ function DatasetCard({ ds, onClick, isSelected }: { ds: DatasetMetadata; onClick
                 </div>
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <h3 className="text-sm font-semibold text-gray-900 dark:text-white truncate max-w-[200px]">{ds.id}</h3>
-                        <SourceBadge source={ds.source} />
-                        {ds.is_paper_seed && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 shrink-0">
-                                <Brain className="w-3 h-3" /> Peer Reviewed
-                            </span>
-                        )}
+                        <h3 className="text-sm font-semibold text-gray-900 dark:text-white truncate sm:max-w-[200px]">{ds.id}</h3>
+                        <div className="flex gap-1.5 flex-wrap">
+                            <SourceBadge source={ds.source} />
+                            {ds.is_paper_seed && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 shrink-0">
+                                    <Brain className="w-3 h-3" /> <span className="hidden xs:inline">Peer Reviewed</span>
+                                </span>
+                            )}
+                        </div>
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 leading-relaxed">{ds.description}</p>
                 </div>
@@ -190,10 +192,10 @@ function DatasetCard({ ds, onClick, isSelected }: { ds: DatasetMetadata; onClick
 
             {/* Recommended Models (Special Feature) */}
             {ds.recommended_models && ds.recommended_models.length > 0 && (
-                <div className="mt-4 px-3 py-2 bg-emerald-50/30 dark:bg-emerald-500/[0.02] border border-emerald-100/50 dark:border-emerald-500/10 rounded-2xl flex items-center justify-between">
+                <div className="mt-4 px-3 py-2 bg-emerald-50/30 dark:bg-emerald-500/[0.02] border border-emerald-100/50 dark:border-emerald-500/10 rounded-2xl flex flex-col xs:flex-row items-start xs:items-center justify-between gap-2">
                     <span className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-tighter">Recommended Models</span>
-                    <div className="flex gap-1.5">
-                        {ds.recommended_models.map((m) => (
+                    <div className="flex gap-1.5 flex-wrap">
+                        {ds.recommended_models.slice(0, 3).map((m) => (
                             <span key={m} className="text-[9px] font-bold text-gray-700 dark:text-gray-300 bg-white dark:bg-white/5 px-2 py-0.5 rounded-lg border border-gray-100 dark:border-white/5">{m}</span>
                         ))}
                     </div>
@@ -233,20 +235,20 @@ function ResearchBenchmarkCard({ ds, onClick }: { ds: DatasetMetadata; onClick: 
             <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 blur-3xl -mr-16 -mt-16 group-hover:bg-indigo-500/10 transition-colors" />
 
             <div className="flex justify-between items-start mb-4 relative z-10">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
                         <Brain className="w-5 h-5" />
                     </div>
-                    <div className="min-w-0">
-                        <h3 className="text-sm font-black text-gray-900 dark:text-white truncate max-w-[150px]">{ds.id}</h3>
+                    <div className="min-w-0 flex-1">
+                        <h3 className="text-sm font-black text-gray-900 dark:text-white truncate">{ds.id}</h3>
                         <div className="flex items-center gap-2">
                             <span className="text-[10px] text-indigo-500 uppercase tracking-tighter font-black">Benchmark</span>
                             {ds.year && <span className="text-[10px] text-gray-400 font-mono italic">{ds.year}</span>}
                         </div>
                     </div>
                 </div>
-                <div className="flex flex-col items-end">
-                    <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Confidence</div>
+                <div className="flex flex-col items-end shrink-0 ml-2">
+                    <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest hidden xs:block">Confidence</div>
                     <div className="text-sm font-black text-indigo-500">{score}%</div>
                 </div>
             </div>
@@ -288,7 +290,7 @@ function ResearchBenchmarkCard({ ds, onClick }: { ds: DatasetMetadata; onClick: 
             </div>
 
             <div className="flex items-center justify-between border-t border-gray-100 dark:border-white/5 pt-4 relative z-10">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                     {ds.paper_url && (
                         <a href={ds.paper_url} target="_blank" rel="noreferrer" className="h-8 px-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/10 text-[10px] text-gray-500 dark:text-gray-400 hover:text-indigo-500 hover:border-indigo-500 transition-all flex items-center gap-1.5 font-bold" onClick={(e) => e.stopPropagation()}>
                             {ds.paper_source === 'ieee' ? 'IEEE' : ds.paper_source === 'semantic_scholar' ? 'S2' : 'ArXiv'} <ExternalLink className="w-2.5 h-2.5" />
@@ -296,7 +298,7 @@ function ResearchBenchmarkCard({ ds, onClick }: { ds: DatasetMetadata; onClick: 
                     )}
                     {ds.paper_source && (
                         <span className="h-8 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/5 border border-emerald-100 dark:border-emerald-500/20 text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 font-bold uppercase tracking-wider">
-                            {ds.paper_source === 'ieee' ? '📄 IEEE Verified' : ds.paper_source === 'semantic_scholar' ? '📄 S2 Verified' : '📄 ArXiv Verified'}
+                            📄 {ds.paper_source === 'ieee' ? 'IEEE' : ds.paper_source === 'semantic_scholar' ? 'S2' : 'ArXiv'} <span className="hidden xs:inline">Verified</span>
                         </span>
                     )}
                 </div>
@@ -347,22 +349,22 @@ function DatasetDetailPanel({ ds, onBack }: { ds: DatasetMetadata; onBack: () =>
         >
 
             {/* Header Actions */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-[#111113] rounded-t-3xl shrink-0">
+            <div className="flex items-center justify-between p-3 md:p-4 border-b border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-[#111113] rounded-t-2xl md:rounded-t-3xl shrink-0 gap-2">
                 <button
                     onClick={onBack}
-                    className="flex items-center gap-2 px-4 py-2 rounded-2xl text-sm font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 transition-colors"
+                    className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-xl md:rounded-2xl text-xs md:text-sm font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 transition-colors"
                 >
-                    <ArrowLeft className="w-4 h-4" />
+                    <ArrowLeft className="w-3.5 h-3.5 md:w-4 md:h-4" />
                     Back
                 </button>
                 <a
                     href={detail?.redirect_url || ds.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-2 px-6 py-2.5 rounded-2xl text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-blue-600 hover:opacity-90 transition-all shadow-lg shadow-indigo-500/20"
+                    className="flex items-center gap-2 px-4 md:px-6 py-2 md:py-2.5 rounded-xl md:rounded-2xl text-xs md:text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-blue-600 hover:opacity-90 transition-all shadow-lg shadow-indigo-500/20 truncate"
                 >
-                    <ExternalLink className="w-4 h-4" />
-                    Open Dataset
+                    <ExternalLink className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                    Open <span className="hidden xs:inline">Dataset</span>
                 </a>
             </div>
 
@@ -408,7 +410,7 @@ function DatasetDetailPanel({ ds, onBack }: { ds: DatasetMetadata; onBack: () =>
                         </div>
 
                         {/* Meta grid */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3">
                             {[
                                 { icon: Download, label: 'Downloads', value: ds.downloads.toLocaleString() },
                                 { icon: Heart, label: 'Likes', value: ds.likes.toLocaleString() },
@@ -784,9 +786,9 @@ function SearchResultsContent() {
                                 <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin"></div>
                                 <Hexagon className="absolute inset-0 m-auto w-3.5 h-3.5 text-indigo-500" />
                             </div>
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                                 <p className="text-sm font-semibold text-gray-900 dark:text-white">Processing</p>
-                                <p className="text-xs text-gray-400 truncate">&quot;{query}&quot;</p>
+                                <p className="text-xs text-gray-400 line-clamp-1 italic">&quot;{query}&quot;</p>
                             </div>
                         </div>
                         <div className="space-y-3">
@@ -825,14 +827,14 @@ function SearchResultsContent() {
                     <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
                         <div className="pb-4 border-b border-gray-100 dark:border-white/5">
                             <p className="text-xs text-gray-400 mb-1">Query</p>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white leading-relaxed">&quot;{displayQuery}&quot;</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white leading-relaxed line-clamp-3 overflow-hidden">&quot;{displayQuery}&quot;</p>
                             {isQueryLong && (
                                 <button
                                     onClick={() => setIsQueryExpanded(!isQueryExpanded)}
-                                    className="text-xs text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 mt-1 flex items-center gap-1"
+                                    className="text-xs text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 mt-2 flex items-center gap-1 font-semibold"
                                 >
                                     {isQueryExpanded ? 'Show less' : 'Show full query'}
-                                    {isQueryExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                    {isQueryExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                                 </button>
                             )}
                         </div>
@@ -1032,7 +1034,7 @@ function SearchResultsContent() {
     };
 
     return (
-        <div className="h-screen w-screen bg-black p-2 md:p-3 overflow-hidden flex flex-col">
+        <div className="h-screen w-screen bg-black p-0 md:p-3 overflow-hidden flex flex-col">
             <AnimatePresence>
                 {showErrorPopup && (
                     <motion.div
@@ -1049,10 +1051,10 @@ function SearchResultsContent() {
                     </motion.div>
                 )}
             </AnimatePresence>
-            <div className="flex-1 bg-[#FAFAFA] dark:bg-[#0c0c0e] rounded-2xl md:rounded-3xl border border-gray-200 dark:border-white/10 flex flex-col overflow-hidden shadow-2xl">
+            <div className="flex-1 bg-[#FAFAFA] dark:bg-[#0c0c0e] rounded-none md:rounded-3xl border-x border-b border-gray-200 dark:border-white/10 flex flex-col overflow-hidden shadow-2xl">
 
                 {/* Header */}
-                <div className="flex h-16 border-b border-gray-100 dark:border-white/5 bg-white dark:bg-[#111113] rounded-t-2xl md:rounded-t-3xl items-center px-4 xl:px-6 justify-between shrink-0">
+                <div className="flex h-16 border-b border-gray-100 dark:border-white/5 bg-white dark:bg-[#111113] rounded-t-none md:rounded-t-3xl items-center px-4 xl:px-6 justify-between shrink-0">
                     <div className="flex items-center gap-2 md:gap-4">
                         {/* Mac-style window controls */}
                         <div className="hidden sm:flex flex-row gap-2 items-center mr-2">
@@ -1124,9 +1126,9 @@ function SearchResultsContent() {
                                             <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin"></div>
                                             <Hexagon className="absolute inset-0 m-auto w-5 h-5 text-indigo-500" />
                                         </div>
-                                        <div>
+                                        <div className="min-w-0 flex-1">
                                             <h3 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">Agent Discovery</h3>
-                                            <p className="text-xs text-gray-400 truncate max-w-[180px] italic">&quot;{query}&quot;</p>
+                                            <p className="text-xs text-gray-400 line-clamp-2 italic leading-relaxed">&quot;{query}&quot;</p>
                                         </div>
                                     </div>
 
@@ -1217,10 +1219,10 @@ function SearchResultsContent() {
                             </div>
                             {/* Source filter pills */}
                             {!isLoading && availableSources.length > 0 && (
-                                <div className="hidden lg:flex items-center gap-1.5">
+                                <div className="flex-1 md:flex-none flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-hide no-scrollbar">
                                     <button
                                         onClick={() => { setFilterText(''); setSelectedDataset(null); }}
-                                        className={`px-3 py-1.5 text-[11px] font-medium rounded-xl border transition-colors ${!filterText
+                                        className={`shrink-0 px-3 py-1.5 text-[11px] font-medium rounded-xl border transition-colors ${!filterText
                                             ? 'bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/20 text-indigo-600 dark:text-indigo-400'
                                             : 'bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10'}`}
                                     >
@@ -1230,7 +1232,7 @@ function SearchResultsContent() {
                                         <button
                                             key={src}
                                             onClick={() => { setFilterText(filterText === src ? '' : src); setSelectedDataset(null); }}
-                                            className={`px-3 py-1.5 text-[11px] font-medium rounded-xl border transition-colors capitalize ${filterText === src
+                                            className={`shrink-0 px-3 py-1.5 text-[11px] font-medium rounded-xl border transition-colors capitalize ${filterText === src
                                                 ? 'bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/20 text-indigo-600 dark:text-indigo-400'
                                                 : 'bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10'}`}
                                         >
@@ -1238,12 +1240,12 @@ function SearchResultsContent() {
                                         </button>
                                     ))}
                                     {/* Category Filters */}
-                                    <div className="w-[1px] h-4 bg-gray-200 dark:bg-white/10 mx-1"></div>
+                                    <div className="shrink-0 w-[1px] h-4 bg-gray-200 dark:bg-white/10 mx-1"></div>
                                     {availableCategories.map(cat => (
                                         <button
                                             key={cat}
                                             onClick={() => { setFilterText(filterText === cat ? '' : cat!); setSelectedDataset(null); }}
-                                            className={`px-3 py-1.5 text-[11px] font-medium rounded-xl border transition-colors capitalize ${filterText === cat
+                                            className={`shrink-0 px-3 py-1.5 text-[11px] font-medium rounded-xl border transition-colors capitalize ${filterText === cat
                                                 ? 'bg-indigo-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
                                                 : 'bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10'}`}
                                         >
@@ -1253,7 +1255,7 @@ function SearchResultsContent() {
                                 </div>
                             )}
                             {!isLoading && (
-                                <span className="text-xs text-gray-400 shrink-0">{filteredDatasets.length} result{filteredDatasets.length !== 1 ? 's' : ''}</span>
+                                <span className="text-[10px] md:text-xs text-gray-400 shrink-0 whitespace-nowrap">{filteredDatasets.length} result{filteredDatasets.length !== 1 ? 's' : ''}</span>
                             )}
                         </div>
 
@@ -1347,7 +1349,7 @@ function SearchResultsContent() {
 
                                                         {/* Section 2: Research Benchmarks with Dropdown */}
                                                         {researchBenchmarks.length > 0 && (
-                                                            <section className="bg-indigo-50/30 dark:bg-indigo-500/[0.02] border border-indigo-100 dark:border-indigo-500/10 rounded-[2.5rem] p-6 md:p-8">
+                                                            <section className="bg-indigo-50/30 dark:bg-indigo-500/[0.02] border border-indigo-100 dark:border-indigo-500/10 rounded-3xl md:rounded-[2.5rem] p-5 md:p-8">
                                                                 <button
                                                                     onClick={() => setIsResearchExpanded(!isResearchExpanded)}
                                                                     className="w-full flex items-center justify-between mb-2 group text-left"
