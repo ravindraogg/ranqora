@@ -55,13 +55,15 @@ export function Navbar() {
                     <div className="absolute inset-0 pointer-events-none rounded-full overflow-hidden z-[-1]">
                         <svg className="w-full h-full" width="100%" height="100%">
                             <motion.rect
-                                x="1" y="1" width="calc(100% - 2px)" height="calc(100% - 2px)"
+                                x="1" y="1"
                                 rx="28" ry="28"
                                 fill="none"
                                 stroke="currentColor"
                                 strokeWidth="2"
                                 className="text-indigo-500/30"
                                 style={{
+                                    width: 'calc(100% - 2px)',
+                                    height: 'calc(100% - 2px)',
                                     pathLength,
                                     filter: 'drop-shadow(0 0 8px rgba(99,102,241,0.5))'
                                 }}

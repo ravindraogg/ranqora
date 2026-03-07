@@ -22,7 +22,7 @@ export function Hero() {
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ duration: 0.8, ease: "easeOut" }}
-                    className="text-7xl sm:text-8xl md:text-[10vw] leading-[0.99] font-black tracking-tighter text-transparent bg-clip-text bg-center bg-cover mb-10 pb-6 lowercase drop-shadow-2xl dark:drop-shadow-none"
+                    className="text-5xl sm:text-8xl md:text-[10vw] leading-[0.99] font-black tracking-tighter text-transparent bg-clip-text bg-center bg-cover mb-10 pb-6 lowercase drop-shadow-2xl dark:drop-shadow-none pr-3"
                     style={{ backgroundImage: "url('https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2670&auto=format&fit=crop')" }}
                 >
                     dataset<br />intelligence<br />reimagined.

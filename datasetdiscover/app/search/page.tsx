@@ -87,7 +87,7 @@ export default function SearchDashboard() {
             </div>
 
             {/* Main Layout: Now using flex-row for side-by-side positioning */}
-            <div className="flex-1 flex flex-col lg:flex-row items-center justify-between px-6 md:px-12 lg:px-32 pt-28 md:pt-32 pb-12 gap-16 lg:gap-24 max-w-[1600px] mx-auto w-full">
+            <div className="flex-1 flex flex-col lg:flex-row items-center justify-between px-6 md:px-12 lg:px-20 pt-28 md:pt-32 pb-12 gap-8 md:gap-12 max-w-[1600px] mx-auto w-full">
 
                 {/* LEFT: Hero text section */}
                 <motion.div
@@ -97,15 +97,15 @@ export default function SearchDashboard() {
                     className="w-full lg:w-1/2 flex flex-col items-start"
                 >
                     <h2
-                        className="font-black tracking-tighter text-transparent bg-clip-text bg-center bg-cover lowercase leading-[0.88] drop-shadow-2xl dark:drop-shadow-none pb-4"
+                        className="font-black tracking-tighter text-transparent bg-clip-text bg-center bg-cover lowercase leading-[0.90] drop-shadow-2xl dark:drop-shadow-none pb-4 mb-[5px] pr-4"
                         style={{
                             backgroundImage: "url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop')",
-                            fontSize: 'clamp(3.5rem, 14vw, 12rem)'
+                            fontSize: 'clamp(3.5rem, 11vw, 10rem)'
                         }}
                     >
                         search.<br />discover.
                     </h2>
-                    <p className="mt-5 mb-10 text-base md:text-lg text-gray-500 dark:text-gray-400 max-w-md">
+                    <p className="mt-5 text-base md:text-lg text-gray-500 dark:text-gray-400 max-w-md">
                         Describe your project. Ranqora analyzes context and ranks the most relevant datasets using semantic and graph intelligence.
                     </p>
                 </motion.div>

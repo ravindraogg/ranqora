@@ -1357,7 +1357,7 @@ function SearchResultsContent() {
                                                                             <Brain className="w-5 h-5" />
                                                                         </div>
                                                                         <div>
-                                                                            <h2 className="text-xl font-black text-gray-900 dark:text-white font-outfit tracking-tight">Research Benchmark Datasets</h2>
+                                                                            <h2 className="text-lg font-black text-gray-900 dark:text-white font-outfit tracking-tight">Research Benchmark Datasets</h2>
                                                                             <p className="text-xs text-gray-400">Academic evaluation standards found via IEEE Xplore, ArXiv & Semantic Scholar</p>
                                                                         </div>
                                                                     </div>
