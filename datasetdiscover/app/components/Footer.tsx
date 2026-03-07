@@ -35,7 +35,7 @@ export function Footer() {
                         <h4 className="text-xs font-bold text-gray-900 dark:text-white uppercase tracking-widest mb-4">Version</h4>
                         <div className="flex flex-col gap-2">
                             <span className="text-[10px] font-mono px-2 py-1 bg-gray-100 dark:bg-white/5 rounded border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-400 w-fit">
-                                v1.1.4-agent
+                                v1.1-agent
                             </span>
                             <span className="text-[10px] text-emerald-500 font-bold uppercase">System Stable</span>
                         </div>

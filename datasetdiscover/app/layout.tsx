@@ -19,6 +19,9 @@ export const metadata: Metadata = {
   description: "The intelligent search engine for medical, foundational, and computer vision datasets. Find, rank, and evaluate high-quality open ML datasets from HuggingFace, Kaggle, and ArXiv, powered by semantic search.",
   keywords: ["Ranqora", "AI datasets", "machine learning datasets", "dataset search engine", "huggingface", "kaggle datasets", "open data", "semantic search"],
   authors: [{ name: "Ranqora AI" }],
+  icons: {
+    icon: "/favicon.svg",
+  },
   openGraph: {
     title: "Ranqora | Premium Dataset Intelligence",
     description: "Accelerate your AI pipelines. Rank and discover open source datasets securely with multi-source retrieval.",
@@ -45,6 +48,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >      <Analytics />

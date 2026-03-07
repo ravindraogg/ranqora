@@ -130,7 +130,7 @@ function DatasetCard({ ds, onClick, isSelected }: { ds: DatasetMetadata; onClick
                             <SourceBadge source={ds.source} />
                             {ds.is_paper_seed && (
                                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 shrink-0">
-                                    <Brain className="w-3 h-3" /> <span className="hidden xs:inline">Peer Reviewed</span>
+                                    <Brain className="w-3.5 h-3.5 flex-none" /> <span className="hidden xs:inline">Peer Reviewed</span>
                                 </span>
                             )}
                         </div>
@@ -236,8 +236,8 @@ function ResearchBenchmarkCard({ ds, onClick }: { ds: DatasetMetadata; onClick: 
 
             <div className="flex justify-between items-start mb-4 relative z-10">
                 <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-                        <Brain className="w-5 h-5" />
+                    <div className="w-10 h-10 min-w-10 min-h-10 aspect-square rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0 flex-none">
+                        <Brain className="w-5 h-5 flex-none" />
                     </div>
                     <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-black text-gray-900 dark:text-white truncate">{ds.id}</h3>
@@ -624,9 +624,7 @@ function SearchResultsContent() {
         return query.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [query];
     }, [query]);
     const isQueryLong = querySentences.length > 3 || query.length > 150;
-    const displayQuery = isQueryExpanded || !isQueryLong
-        ? query
-        : query.slice(0, 150).trim() + '...';
+    const displayQuery = query;
 
     // ── Live elapsed timer ──────────────────────────────────────────────
     const timerStartRef = useRef<number>(Date.now());
@@ -871,7 +869,7 @@ function SearchResultsContent() {
                     <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
                         <div className="pb-4 border-b border-gray-100 dark:border-white/5">
                             <p className="text-xs text-gray-400 mb-1">Query</p>
-                            <p className={`text-sm font-medium text-gray-900 dark:text-white leading-relaxed overflow-hidden ${isQueryExpanded ? '' : 'line-clamp-3 italic opacity-80'}`}>&quot;{displayQuery}&quot;</p>
+                            <p className={`text-sm font-medium text-gray-900 dark:text-white leading-relaxed overflow-hidden whitespace-pre-wrap ${isQueryExpanded ? 'max-h-none opacity-100' : 'line-clamp-3 italic opacity-70'}`}>&quot;{displayQuery}&quot;</p>
                             {isQueryLong && (
                                 <button
                                     onClick={() => setIsQueryExpanded(!isQueryExpanded)}
