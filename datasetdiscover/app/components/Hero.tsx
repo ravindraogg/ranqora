@@ -51,7 +51,7 @@ export function Hero() {
                         Explore Datasets
                     </Link>
                     <Link
-                        href="#demo"
+                        href="/search"
                         className="w-full sm:w-auto px-8 py-4 rounded-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-white/10 font-semibold text-lg transition-all flex items-center justify-center gap-2 group"
                     >
                         <Database className="w-5 h-5 text-gray-500" />

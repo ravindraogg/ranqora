@@ -60,7 +60,8 @@ async def rank_stream(context: ProjectContext, request: Request):
         try:
             # ── AUTH ──────────────────────────────────────────────
             await check_disconnection()
-            auth_service.validate_client(context.client_id, request.client.host)
+            ip = auth_service.get_ip(request)
+            auth_service.validate_client(context.client_id, ip)
 
             # ── CHECK FULL RESPONSE CACHE ─────────────────────────
             cached_response = llm_service.get_cached_final_response(context.query)
@@ -385,7 +386,8 @@ async def rank_project_datasets(context: ProjectContext, request: Request):
     """
     try:
         # Step 0: Auth & Rate Limiting
-        auth_service.validate_client(context.client_id, request.client.host)
+        ip = auth_service.get_ip(request)
+        auth_service.validate_client(context.client_id, ip)
 
         # Step 1: Unified LLM parsing + planning (1 call)
         llm_plan = await llm_service.parse_and_plan(context.query)
@@ -475,7 +477,7 @@ async def submit_feedback(feedback: FeedbackEvent, request: Request):
     Expects event types: 'click', 'bookmark', or 'download'.
     """
     # Phase 7 Auth
-    ip = request.client.host
+    ip = auth_service.get_ip(request)
     client_id = auth_service.ip_to_client_id.get(ip)
     if not client_id:
          raise HTTPException(status_code=403, detail="No client session found for this IP.")

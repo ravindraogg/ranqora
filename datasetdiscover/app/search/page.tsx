@@ -24,8 +24,15 @@ export default function SearchDashboard() {
     const [shake, setShake] = useState(false);
     const router = useRouter();
 
-    // Step 1: On mount, fetch client_id from backend
+    // Step 1: On mount, fetch client_id from backend. 
+    // Optimization: Check for existing session first to avoid jitter on fast inputs
     useEffect(() => {
+        const stored = sessionStorage.getItem('ranqora_client_id');
+        if (stored) {
+            setClientId(stored);
+            setIsLoadingAuth(false);
+        }
+
         async function fetchClientId() {
             try {
                 const res = await fetch(`${API_BASE}/api/auth/client_id`);
@@ -33,8 +40,12 @@ export default function SearchDashboard() {
                 const data = await res.json();
                 setClientId(data.client_id);
                 sessionStorage.setItem('ranqora_client_id', data.client_id);
+                setAuthError(null);
             } catch (e: unknown) {
-                setAuthError(`Could not reach backend: ${(e as Error).message}`);
+                // Only show error if we don't even have a stored ID
+                if (!stored) {
+                    setAuthError(`Could not reach backend: ${(e as Error).message}`);
+                }
             } finally {
                 setIsLoadingAuth(false);
             }

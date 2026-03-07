@@ -79,7 +79,8 @@ async def rate_limiter(request: Request, call_next):
     if RATE_LIMIT_PER_MINUTE <= 0:
         return await call_next(request)
 
-    ip = request.client.host if request.client else "unknown"
+    xff = request.headers.get("x-forwarded-for")
+    ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "unknown")
     now = time.time()
     window = 60  # 1 minute
 

@@ -514,8 +514,9 @@ function DatasetDetailPanel({ ds, onBack }: { ds: DatasetMetadata; onBack: () =>
                                         <span className="text-gray-300 dark:text-gray-700">({displayRows.length}/{preview.rows.length} rows)</span>
                                     </h4>
                                     {preview.rows.length > 5 && (
-                                        <button onClick={() => setShowAllRows(v => !v)} className="text-xs text-indigo-500 hover:underline">
+                                        <button onClick={() => setShowAllRows(v => !v)} className="text-xs text-indigo-500 hover:underline flex items-center gap-1">
                                             {showAllRows ? 'Show less' : `Show all ${preview.rows.length} rows`}
+                                            {showAllRows ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                                         </button>
                                     )}
                                 </div>
@@ -622,10 +623,10 @@ function SearchResultsContent() {
     const querySentences = useMemo(() => {
         return query.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [query];
     }, [query]);
-    const isQueryLong = querySentences.length > 3;
+    const isQueryLong = querySentences.length > 3 || query.length > 150;
     const displayQuery = isQueryExpanded || !isQueryLong
         ? query
-        : querySentences.slice(0, 3).join('').trim() + '...';
+        : query.slice(0, 150).trim() + '...';
 
     // ── Live elapsed timer ──────────────────────────────────────────────
     const timerStartRef = useRef<number>(Date.now());
@@ -677,11 +678,21 @@ function SearchResultsContent() {
     useEffect(() => {
         const stored = typeof window !== 'undefined' ? sessionStorage.getItem(SESSION_KEY) : null;
         const resolved = clientIdFromUrl || stored;
+
+        // If we have nothing at all, wait a second to ensure it's not a hydration delay
         if (!resolved) {
-            router.replace('/search');
-            return;
+            const timer = setTimeout(() => {
+                if (!clientIdFromUrl && !sessionStorage.getItem(SESSION_KEY)) {
+                    router.replace('/search');
+                }
+            }, 1000);
+            return () => clearTimeout(timer);
         }
+
         setClientId(resolved);
+        if (clientIdFromUrl && !stored) {
+            sessionStorage.setItem(SESSION_KEY, clientIdFromUrl);
+        }
     }, [clientIdFromUrl, router]);
 
     // Step 2: Open SSE stream once clientId is available
@@ -705,7 +716,11 @@ function SearchResultsContent() {
                     signal: controller.signal,
                 });
 
-                if (res.status === 403) { router.replace('/search'); return; }
+                if (res.status === 403) {
+                    setApiError("Authentication session expired. Please return to the search page.");
+                    setIsLoading(false);
+                    return;
+                }
                 if (!res.ok) throw new Error(`Server error: ${res.status}`);
                 if (!res.body) throw new Error('No response body');
 
@@ -856,14 +871,14 @@ function SearchResultsContent() {
                     <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
                         <div className="pb-4 border-b border-gray-100 dark:border-white/5">
                             <p className="text-xs text-gray-400 mb-1">Query</p>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white leading-relaxed line-clamp-3 overflow-hidden">&quot;{displayQuery}&quot;</p>
+                            <p className={`text-sm font-medium text-gray-900 dark:text-white leading-relaxed overflow-hidden ${isQueryExpanded ? '' : 'line-clamp-3 italic opacity-80'}`}>&quot;{displayQuery}&quot;</p>
                             {isQueryLong && (
                                 <button
                                     onClick={() => setIsQueryExpanded(!isQueryExpanded)}
                                     className="text-xs text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 mt-2 flex items-center gap-1 font-semibold"
                                 >
                                     {isQueryExpanded ? 'Show less' : 'Show full query'}
-                                    {isQueryExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                    {isQueryExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                                 </button>
                             )}
                         </div>
@@ -1389,7 +1404,7 @@ function SearchResultsContent() {
                                                                         </div>
                                                                         <div>
                                                                             <h2 className="text-lg font-black text-gray-900 dark:text-white font-outfit tracking-tight">Research Benchmark Datasets</h2>
-                                                                            <p className="text-xs text-gray-400">Academic evaluation standards found via IEEE Xplore, ArXiv & Semantic Scholar</p>
+                                                                            <p className="text-xs text-gray-400">Academic evaluation standards ({researchBenchmarks.length} candidates found)</p>
                                                                         </div>
                                                                     </div>
                                                                     <div className="w-10 h-10 rounded-full border border-gray-200 dark:border-white/10 flex items-center justify-center text-gray-400 group-hover:bg-white dark:group-hover:bg-white/5 transition-all">

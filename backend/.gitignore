@@ -32,3 +32,14 @@ docker-compose.override.yml
 pipeline_output
 scripts
 cache
+.git
+.huggingface
+*.db
+*.npy
+*.db
+*.npy
+__pycache__/
+agent_memory.db
+app/agent_memory.db
+feedback.db
+data/embeddings.npy
