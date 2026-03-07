@@ -208,26 +208,20 @@ async def rank_stream(context: ProjectContext, request: Request):
             )
             
             # Post-Ranking Update: Re-ingest top with scores for SUCCESSFUL_RECO
-            if ranked_semantic:
+            if ranked_semantic["all"]:
                 await loop.run_in_executor(
                     None,
                     lambda: graph_service.ingest_candidates(
                         query=context.query,
                         tasks=context.tasks,
-                        candidates=ranked_semantic[:20],
+                        candidates=ranked_semantic["all"][:20],
                         domain=effective_domain,
                         stop_event=stop_event,
                     )
                 )
             
-            # Point 10: Deep LLM Re-Ranking (Top 40 -> Top 20)
-            await check_disconnection()
-            yield _sse({"stage": 3.5, "text": "Performing deep agent re-ranking with Gemini..."})
-            ranked = await llm_service.rank_with_llm(
-                query=context.query,
-                candidates=ranked_semantic,
-                top_k=25  # Extract top 25 high-quality candidates
-            )
+            # Phase 10: Adaptive Rank Verification (Internal only, no LLM bypass)
+            ranked = ranked_semantic["all"][:25]
             
             # Apply categorization: Academic sources -> Research, Platforms -> Practical (Fix per user)
             all_practical = []
@@ -435,8 +429,6 @@ async def rank_project_datasets(context: ProjectContext, request: Request):
             domain=effective_domain,
             keyword_variants=llm_plan.get("keyword_variants", []),
             anti_keywords=llm_plan.get("anti_keywords", []),
-            dataset_role=llm_plan.get("dataset_role"),
-            research_goal=llm_plan.get("research_goal"),
             top_k=TOP_K_RESULTS
         )
         ranked = ranking_results["all"]

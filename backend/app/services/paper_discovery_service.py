@@ -128,11 +128,17 @@ class PaperDiscoveryService:
         except Exception as e:
             logger.error(f"Failed to initialize SQLite cache: {e}")
 
-    async def discover(self, api_query: str, max_papers: int = 50) -> List[Dict[str, Any]]:
+    async def discover(self, api_query: str, request=None, max_papers: int = 50) -> List[Dict[str, Any]]:
         """
         Search papers and extract rich dataset metadata with caching.
         Primary cache: SQLite, Secondary/Legacy: JSON.
         """
+        async def check_abort():
+            if request and await request.is_disconnected():
+                logger.info(f"Paper Discovery: Client disconnected. Aborting search for '{api_query[:40]}'")
+                raise asyncio.CancelledError()
+
+        await check_abort()
         discovered = []
         cache_key = re.sub(r'[^a-zA-Z0-9]', '_', api_query).lower()
         

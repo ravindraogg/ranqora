@@ -50,9 +50,11 @@ class GraphService:
             "CREATE CONSTRAINT IF NOT EXISTS FOR (q:Query) REQUIRE q.text IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Paper) REQUIRE p.id IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (t:Task) REQUIRE t.name IS UNIQUE",
-            # Drop old index if exists and recreate with correct dimension (384)
+            # Recreate indices with correct dimension (384)
             "DROP INDEX dataset_vector_index IF EXISTS",
-            "CREATE VECTOR INDEX dataset_vector_index IF NOT EXISTS FOR (d:Dataset) ON (d.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 384, `vector.similarity_function`: 'cosine'}}"
+            "CREATE VECTOR INDEX dataset_vector_index IF NOT EXISTS FOR (d:Dataset) ON (d.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 384, `vector.similarity_function`: 'cosine'}}",
+            "DROP INDEX dataset_title_vector_index IF EXISTS",
+            "CREATE VECTOR INDEX dataset_title_vector_index IF NOT EXISTS FOR (d:Dataset) ON (d.title_embedding) OPTIONS {indexConfig: {`vector.dimensions`: 384, `vector.similarity_function`: 'cosine'}}"
         ]
         with self.driver.session() as session:
             for q in queries:
@@ -84,6 +86,16 @@ class GraphService:
             texts = [d["text"] for d in datasets_to_embed]
             try:
                 embs = get_embeddings(texts)
+                # Store embeddings in the datasets list for later node-SET
+                for i, ds in enumerate(datasets_to_embed):
+                    ds["embedding"] = embs[i].tolist()
+                
+                # Title-only embeddings for the new title index
+                title_texts = [d["text"].split(" ")[0] for d in datasets_to_embed] # Approx title
+                title_embs = get_embeddings(title_texts)
+                for i, ds in enumerate(datasets_to_embed):
+                    ds["title_embedding"] = title_embs[i].tolist()
+
                 sim_matrix = cosine_similarity(embs)
                 for i in range(len(datasets_to_embed)):
                     for j in range(i + 1, len(datasets_to_embed)):
@@ -174,7 +186,8 @@ class GraphService:
                     session.run("""
                         UNWIND $batch AS d_data
                         MERGE (d:Dataset {id: d_data.id})
-                        SET d.source = d_data.source, d.downloads = d_data.downloads, d.likes = d_data.likes
+                        SET d.source = d_data.source, d.downloads = d_data.downloads, d.likes = d_data.likes,
+                            d.embedding = d_data.embedding, d.title_embedding = d_data.title_embedding
                         WITH d, d_data
                         MERGE (s:Source {name: d_data.source})
                         MERGE (s)-[:HOSTS]->(d)
@@ -321,10 +334,10 @@ class GraphService:
             except Exception as e:
                 logger.error(f"Failed to record successful discovery in Neo4j: {e}")
 
-    def vector_search(self, embedding: List[float], top_k: int = 20) -> List[Dict[str, Any]]:
+    def vector_search(self, embedding: List[float], top_k: int = 20, index_name: str = 'dataset_vector_index') -> List[Dict[str, Any]]:
         """
-        Fix 1: Embedding-based nearest neighbor search in Neo4j.
-        Used for Query Expansion.
+        Fix 1 & 3: High-performance native vector search in Neo4j.
+        Supports both full-content and title-only indices.
         """
         if not self._ensure_driver():
             return []
@@ -332,12 +345,13 @@ class GraphService:
         results = []
         with self.driver.session() as session:
             try:
-                # Use the vector index we created in _init_schema
-                res = session.run("""
-                    CALL db.index.vector.queryNodes('dataset_vector_index', $top_k, $emb)
+                # Use the native vector search index
+                query = f"""
+                    CALL db.index.vector.queryNodes('{index_name}', $top_k, $emb)
                     YIELD node, score
                     RETURN node.id AS id, node.source AS source, labels(node) AS labels, score
-                """, emb=embedding, top_k=top_k)
+                """
+                res = session.run(query, emb=embedding, top_k=top_k)
                 
                 for record in res:
                     results.append({
@@ -347,7 +361,7 @@ class GraphService:
                         "score": record["score"]
                     })
             except Exception as e:
-                logger.warning(f"Vector search failed (likely index not ready or unsupported): {e}")
+                logger.warning(f"Vector search failed on index '{index_name}': {e}")
                 
         return results
 

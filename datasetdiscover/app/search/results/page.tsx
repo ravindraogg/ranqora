@@ -320,18 +320,31 @@ function DatasetDetailPanel({ ds, onBack }: { ds: DatasetMetadata; onBack: () =>
         setError(null);
         setDetail(null);
         setShowAllRows(false);
+
+        const controller = new AbortController();
+
         async function load() {
             try {
-                const res = await fetch(`${API_BASE}/api/projects/dataset/${ds.source}/${ds.id}`);
+                const res = await fetch(`${API_BASE}/api/projects/dataset/${ds.source}/${ds.id}`, {
+                    signal: controller.signal
+                });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                setDetail(await res.json());
+                const data = await res.json();
+                if (!controller.signal.aborted) {
+                    setDetail(data);
+                }
             } catch (e: unknown) {
-                setError((e as Error).message);
+                if ((e as Error).name !== 'AbortError') {
+                    setError((e as Error).message);
+                }
             } finally {
-                setLoading(false);
+                if (!controller.signal.aborted) {
+                    setLoading(false);
+                }
             }
         }
         load();
+        return () => controller.abort();
     }, [ds]);
 
     const preview = detail?.preview;
@@ -604,6 +617,7 @@ function SearchResultsContent() {
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
     const [showStagePopup, setShowStagePopup] = useState(true);
     const [showErrorPopup, setShowErrorPopup] = useState(false);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const querySentences = useMemo(() => {
         return query.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [query];
@@ -674,7 +688,13 @@ function SearchResultsContent() {
     useEffect(() => {
         if (!clientId) return;
 
-        let cancelled = false;
+        // Abort previous request if it exists
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
         async function stream() {
             try {
@@ -682,6 +702,7 @@ function SearchResultsContent() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query, client_id: clientId }),
+                    signal: controller.signal,
                 });
 
                 if (res.status === 403) { router.replace('/search'); return; }
@@ -692,9 +713,9 @@ function SearchResultsContent() {
                 const decoder = new TextDecoder();
                 let buffer = '';
 
-                while (!cancelled) {
+                while (true) {
                     const { done, value } = await reader.read();
-                    if (done) break;
+                    if (done || controller.signal.aborted) break;
 
                     buffer += decoder.decode(value, { stream: true });
 
@@ -708,6 +729,9 @@ function SearchResultsContent() {
                         const raw = line.slice(6);
                         let evt: Record<string, unknown>;
                         try { evt = JSON.parse(raw); } catch { continue; }
+
+                        // Check again before state updates
+                        if (controller.signal.aborted) return;
 
                         // Auth / generic error from backend
                         if (evt.error) {
@@ -763,7 +787,9 @@ function SearchResultsContent() {
                     }
                 }
             } catch (e: unknown) {
-                if (!cancelled) {
+                if ((e as Error).name === 'AbortError') {
+                    console.log('Fetch aborted');
+                } else if (!controller.signal.aborted) {
                     setApiError((e as Error).message);
                     setIsLoading(false);
                     setCurrentStageIndex(TOTAL_STAGES);
@@ -772,7 +798,10 @@ function SearchResultsContent() {
         }
 
         stream();
-        return () => { cancelled = true; };
+        return () => {
+            controller.abort();
+            abortControllerRef.current = null;
+        };
     }, [clientId, query, router]);
 
     const renderSidebarContent = () => {

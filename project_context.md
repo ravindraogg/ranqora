@@ -1,360 +1,137 @@
-# Dataset Intelligence Infrastructure
-## AI-Powered Dataset Discovery & Ranking Platform
+# Ranqora: Dataset Intelligence Infrastructure
+## AI-Powered Autonomous Dataset Discovery & Adaptive Ranking Platform
 
 ---
 
-# 1. Vision
+# 1. Vision & Mission
 
-Build a multi-agent AI infrastructure that automatically discovers, evaluates, ranks, and compares datasets based on research or project context.
+Ranqora is a multi-agent AI infrastructure designed to eliminate discovery friction for research and development datasets. Unlike traditional search engines, Ranqora **perceives, plans, and pursues** dataset discovery using an autonomous exploration loop.
 
-The system should:
-
-- Understand research intent
-- Dynamically retrieve datasets from multiple platforms
-- Normalize heterogeneous metadata
-- Rank datasets using multi-factor intelligence
-- Provide top-7 comparative output
-- Improve over time via feedback-driven learning
-
-This is not a dataset search engine.
-This is dataset intelligence infrastructure.
+**The Vision:** To build the world's most intelligent dataset knowledge graph that automatically evaluates, ranks, and compares datasets based on the subtle nuances of project context.
 
 ---
 
 # 2. Core Objectives
 
-1. Eliminate dataset discovery friction
-2. Provide explainable dataset ranking
-3. Integrate knowledge graph-based credibility
-4. Support commercial license compatibility
-5. Evolve via user feedback
+1.  **Autonomous Exploration**: Move beyond keyword matching to intelligent, iterative discovery.
+2.  **Academic-Practical Hybrid**: Seamlessly bridge the gap between academic benchmarks (ArXiv/IEEE) and practical implementation platforms (HF/Kaggle).
+3.  **Explainable Intelligence**: Provide deep, semantic reasoning for every recommendation.
+4.  **Adaptive Ranking**: Utilize user feedback and community signals to evolve the ranking model (LightGBM LambdaRank).
+5.  **Graph-Driven Credibility**: Establish dataset authority through citation networks and structural knowledge edges (Neo4j).
 
 ---
 
-# 3. Development Phases
+# 3. System Evolution
 
----
+### MVP Stage (Semantic Retrieval)
+- Initial iteration: Simple cosine similarity over HuggingFace metadata.
 
-## Phase 1: MVP — Semantic Retrieval & Ranking
+### Multi-Source Stage (Tool Orchestration)
+- Introduction of the `RetrievalOrchestrator` and `ToolRegistry`.
+- Support for Kaggle, ArXiv, and Open Data portals.
 
-Goal:
-Build minimal working backend that retrieves datasets and ranks top 7.
-
-Components:
-
-- FastAPI backend
-- HuggingFace dataset retrieval
-- Sentence-transformer embeddings
-- Cosine similarity ranking
-- Top-7 response
-- Clean API endpoint
-
-Output:
-Ranked dataset list based purely on semantic similarity.
-
-No training required.
-
----
-
-## Phase 2: Multi-Source Dynamic Retrieval
-
-Goal:
-Replace static retrieval with dynamic tool orchestration.
-
-Add:
-
-- Tool registry system
-- Dynamic retrieval orchestrator
-- Async parallel retrieval
-- Kaggle API integration
-- arXiv dataset extraction
-- GitHub dataset detection
-- Open Data portal connectors
-
-Key Feature:
-Planner chooses tools dynamically based on project context.
-
----
-
-## Phase 3: Multi-Factor Ranking Engine
-
-Goal:
-Move beyond pure semantic similarity.
-
-Introduce ranking dimensions:
-
-E_i = Semantic similarity  
-T_i = Task alignment  
-Q_i = Dataset quality  
-L_i = License compatibility  
-F_i = Freshness  
-G_i = Graph credibility  
-
-Ranking formula:
-
-R_i = αE_i + βT_i + γQ_i + δL_i + εF_i + ζG_i
-
-Add:
-
-- Quality heuristic scoring
-- License rule engine
-- Task extraction via LLM
-
-Return:
-
-Top-7 comparative ranking table.
-
----
-
-## Phase 4: Dataset Knowledge Graph
-
-Goal:
-Introduce structural intelligence.
-
-Add:
-
-- Neo4j graph database
-- Nodes: Dataset, Paper, Task, Institution, Author
-- Edges: used_for, cited_by, benchmark_for, similar_to
-- Graph centrality scoring
-
-Graph score:
-
-G_i = log(1 + citations) + PageRank(D_i)
-
-This boosts credible datasets.
-
----
-
-## Phase 5: Feedback Learning & Ranking Model
-
-Goal:
-Self-improving ranking system.
-
-Track:
-
-- Clicks
-- Downloads
-- User dwell time
-- Re-query behavior
-
-Train:
-
-Learning-to-rank model (LightGBM Ranker)
-
-Replace weighted formula with trained ranking model.
-
-System becomes adaptive.
-
----
-
-## Phase 6: Lightweight Preview & Scalable Redirection
-
-Goal:
-Scalable, low-cost dataset exploration without proxy-hosting multi-GB data.
-
-System can:
-
-- Fetch real-time metadata previews (File structure, columns, types)
-- Detect dataset size and calculate estimated download times
-- Map direct "Go to Source" redirects to Kaggle/HF/etc.
-- Identify data types (Tabular, NLP, Image) for customized preview logic
-- Enforce a 1MB hard limit on preview data fetching
-
-Platform remains an intelligence and discovery layer without the storage/egress costs of a hosting provider.
-
----
-
-## Phase 7: Enterprise Infrastructure
-
-Goal:
-VC-scale deployment.
-
-Add:
-
-- Private dataset indexing
-- Organization-level knowledge graphs
-- Compliance scanner
-- Role-based access control
-- add LLM gemini for prasing the user input from frontend and segregate the project context to search the dataset.
-- add LLM gemini for generating the dataset description and summary.
-- make a client_id random generating for each user but per ip request it should be same for each ip. 
-- add rate limit for the client_id based on the ip address and client id hybrid. 
-- ithout client_id no response should be sent to the frontend 
+### Agentic Stage (The Current State)
+- **DiscoveryAgent**: An autonomous agent that runs an iterative loop (Perceive -> Plan -> Explore -> Evaluate).
+- **Paper Mining**: Proactive extraction of dataset names from research papers via ArXiv and IEEE APIs.
+- **Graph Ingestion**: Automated mapping of discovered datasets into a Neo4j Knowledge Graph.
 
 ---
 
 # 4. High-Level Architecture
 
-User
-↓
-Next.js Frontend
-↓
-FastAPI API Gateway
-↓
-AI Orchestrator
-↓
-Goal Interpreter Agent
-↓
-Planner Agent
-↓
-Dynamic Retrieval Orchestrator
-↓
-Parallel Tool Execution
-↓
-Metadata Normalization Layer
-↓
-Ranking Engine
-↓
-Top-7 Comparator
-↓
-Confidence Estimator
-↓
-Structured Response
-
-Databases:
-
-- PostgreSQL (users, logs)
-- Vector DB (embeddings)
-- Neo4j (knowledge graph)
-- Redis (caching, async tasks)
+```mermaid
+graph TD
+    User([User Request]) --> NextJS[Next.js Frontend]
+    NextJS --> FastAPI[FastAPI Gateway]
+    
+    subgraph "AI Intelligence Layer"
+        FastAPI --> Planner[LLM Goal Planner]
+        Planner --> Agent[Discovery Agent]
+        Agent --> MemoryStore[(Long-Term Memory)]
+    end
+    
+    subgraph "Dynamic Retrieval Layer"
+        Agent --> PaperMiner[Paper Mining - ArXiv/IEEE]
+        Agent --> ToolOrch[Multi-Source Orchestrator]
+        ToolOrch --> HF[HuggingFace]
+        ToolOrch --> Kaggle[Kaggle]
+        ToolOrch --> ODP[Open Data Portals]
+    end
+    
+    subgraph "Ranking & Knowledge Layer"
+        Agent --> GraphDB[(Neo4j Knowledge Graph)]
+        GraphDB --> VectorSearch[Native Vector Search]
+        VectorSearch --> Ranker[LambdaRank Engine]
+        Ranker --> LLMExplain[LLM Semantic Explainer]
+    end
+    
+    LLMExplain --> FinalOutput[[Top 20 Ranked Results]]
+```
 
 ---
 
 # 5. Core Intelligence Modules
 
-## Goal Interpreter
+### 🧠 Discovery Agent (`discovery_agent.py`)
+The heart of Ranqora. It operates on an iterative autonomous loop:
+- **Perceive**: Parses query intent, modality, and domain constraints.
+- **Plan**: Strategically selects search queries and tool priorities.
+- **Explore**: Parallel execution across platforms with early-stopping logic.
+- **Evaluate**: Real-time confidence scoring and expansion suggestion.
 
-Input:
-Project title + abstract
+### 📄 Paper Discovery (`paper_discovery_service.py`)
+Unique "Academic-First" approach:
+- Scans ArXiv and IEEE Xplore for recent research papers related to the query.
+- Extracts "Seed Datasets" mentioned in abstracts.
+- Injects these high-value benchmarks into the retrieval pool.
 
-Output:
-Structured intent JSON:
-- domain
-- tasks
-- modality
-- supervision
-- license requirement
+### 🕸️ Graph Service (`graph_service.py`)
+Structural intelligence via Neo4j:
+- **Native Vector Search**: High-performance retrieval using `db.index.vector.queryNodes`.
+- **Similarity Edges**: Dynamically links datasets based on embedding distance.
+- **Title Indexing**: Specialized index for higher quality query expansion.
 
----
-
-## Planner Agent
-
-Determines:
-
-- Which retrieval tools to activate
-- Retrieval priority order
-- Required metadata depth
-
----
-
-## Dynamic Retrieval Orchestrator
-
-Executes:
-
-- Kaggle search
-- HuggingFace search
-- arXiv extraction
-- Open data crawling
-- GitHub dataset discovery
-
-All outputs normalized into:
-
-DatasetMetadata object.
+### 📊 Ranking Engine (`ranking_service.py`)
+A multi-factor hybrid system:
+- **LambdaRank**: A LightGBM Learning-to-Rank model that adapts based on user clicks/downloads.
+- **Semantic Alignment**: Split-field embedding matching (Title/Desc/Tags).
+- **Signal Weighting**: Combines quality, license, freshness, and graph centrality.
+- **Decoupled Explanation**: LLM no longer performs mandatory ranking; it provides deep semantic "Why relevant" logic for the top results.
 
 ---
 
-## Ranking Engine
+# 6. Premium Frontend Layer
 
-For each dataset:
+### Real-Time Interaction
+- **Agent Reasoning Trace**: Users can watch the agent's internal thought process and strategy in real-time.
+- **Multi-Stage Progress**: Granular SSE updates for Perception, Discovery, Ingestion, and Ranking.
 
-Compute:
-
-E_i = cosine similarity
-T_i = task overlap score
-Q_i = quality score
-L_i = license score
-F_i = freshness score
-G_i = graph credibility score
-
-Final ranking:
-
-R_i = weighted combination or learned ranker output
-
----
-
-## Confidence Estimator
-
-Confidence score:
-
-Confidence = 1 - (std(R) / mean(R))
-
-High dominance → strong recommendation
-Flat scores → weak differentiation
-
----
-
-# 6. Full Pipeline
-
-1. Receive project input
-2. Extract semantic intent
-3. Generate query embedding
-4. Plan retrieval strategy
-5. Execute parallel dataset search
-6. Normalize dataset metadata
-7. Compute ranking features
-8. Calculate final ranking score
-9. Select top 7
-10. Generate comparison report
-11. Return structured response
+### Mobile-First Design
+- **Responsive Layout**: Edge-to-edge screens with horizontal filter scrolling and optimized card views.
+- **Micro-Animations**: Framer Motion powered transitions and interactive hover-tilt effects.
+- **Rich Visualization**: Interactive "Agent Memory" popups for deep query context visibility.
 
 ---
 
 # 7. Tech Stack
 
-Frontend:
-- Next.js
-- Tailwind
-- Recharts
-
-Backend:
-- FastAPI
-- Pydantic
-- Sentence Transformers
-- LightGBM (later)
-
-Databases:
-- PostgreSQL
-- Weaviate / Pinecone
-- Neo4j
-- Redis
-
-Async:
-- Celery or Ray
-
-Deployment:
-- Docker
-- AWS
+| Layer | Technologies |
+| :--- | :--- |
+| **Frontend** | Next.js, Tailwind CSS, Framer Motion, Lucide Icons |
+| **Backend** | FastAPI, Uvicorn, Pydantic |
+| **AI/ML** | Google Gemini (Pro/Flash), LightGBM, BGE Embeddings |
+| **Graph DB** | Neo4j (GrapheneDB / Aura) |
+| **Search Tools** | Kaggle API, HuggingFace API, IEEE Xplore, ArXiv API |
+| **Deployment** | Docker, HuggingFace Spaces, Vercel |
 
 ---
 
 # 8. Competitive Advantage
 
-- Multi-factor dataset intelligence
-- Knowledge graph credibility scoring
-- Dynamic retrieval architecture
-- Self-improving ranking model
-- Transparent comparison interface
-
----
-
-# 9. Long-Term Moat
-
-- User interaction data
-- Dataset performance feedback
-- Proprietary ranking signals
-- Expanding dataset knowledge graph
-- Enterprise private indexing
+- **Autonomous Agent**: Unlike search bars, Ranqora *explores* the solution space.
+- **Academic Mining**: Discovers hidden benchmarks not yet indexed on Kaggle/HF.
+- **Graph-First**: Uses structural credibility signals (citations/similarity) for superior ranking.
+- **Zero Friction**: Unified authentication and rate-limiting using IP-based Client IDs.
 
 ---
 

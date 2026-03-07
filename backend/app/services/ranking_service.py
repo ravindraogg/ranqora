@@ -615,9 +615,24 @@ def rank_datasets(
             tags = raw_title
         tags_list.append(tags)
 
+    # Check abort before embeddings
+    if stop_event and stop_event.is_set():
+        logger.info("Ranking aborted before embeddings.")
+        return []
+
     # Batch embed all three fields
     title_embs = get_embeddings(titles)
+    
+    if stop_event and stop_event.is_set():
+        logger.info("Ranking aborted during embeddings.")
+        return []
+        
     desc_embs = get_embeddings(descriptions)
+    
+    if stop_event and stop_event.is_set():
+        logger.info("Ranking aborted during embeddings.")
+        return []
+        
     tags_embs = get_embeddings(tags_list)
 
     # Weighted combination: 0.4 title + 0.3 tags + 0.3 description
@@ -643,6 +658,9 @@ def rank_datasets(
         task_scores = [0.5 for _ in filtered_candidates]
 
     # ── 3. Dataset Type Filter + Graph Mapping ──
+    if stop_event and stop_event.is_set():
+        return []
+        
     # Map valid types first
     valid_candidates = []
     type_penalties = []
@@ -676,6 +694,9 @@ def rank_datasets(
     final_candidates = []
     raw_scores = []
     for i, ds in enumerate(filtered_candidates):
+        if stop_event and stop_event.is_set():
+            return []
+            
         E_i = float(semantic_sims[i])
         T_i = float(task_scores[i])
         K_i = float(keyword_overlaps[i])
@@ -699,19 +720,18 @@ def rank_datasets(
         source = ds.get("source", "unknown").lower()
         trust_score = SOURCE_TRUST_SCORES.get(source, 0.4)
 
-        # ── Final Weighted Re-ranking (Fix 4: Activate Graph Learning) ──
-        # Rebalanced Formula (based on user requested weights + existing factors)
-        # 0.30 sem + 0.15 task + 0.10 kw + 0.10 qual + 0.10 pop + 0.15 graph + 0.05 trust + 0.05 fresh = 1.0
-        base_score = (
-            (0.30 * E_i) +
-            (0.15 * T_i) +
-            (0.10 * K_i) +
-            (0.10 * Q_i) +
-            (0.10 * P_i) +
-            (0.15 * G_i) +
-            (0.05 * trust_score) +
-            (0.05 * F_i)
-        )
+        # ── Final Adaptive Re-ranking (LambdaRank Integration) ──
+        features = {
+            "semantic": E_i,
+            "task": T_i,
+            "quality": Q_i,
+            "license": L_i,
+            "freshness": F_i,
+            "graph": G_i
+        }
+        
+        # Use LightGBM model if trained, otherwise adaptive heuristic
+        base_score = learning_ranker.predict_score(features)
 
         # ── Additive task intent bonus (capped at 0.10) ──
         intent_bonus = _task_intent_bonus(query, tasks or [], ds)
@@ -723,12 +743,10 @@ def rank_datasets(
         anti_penalty = _anti_keyword_penalty(ds, anti_keywords or [], constraint_terms)
         
         # ── Graph + Type Isolation Penalty ──
-        # Drastically penalize graph scores leaking across misaligned boundaries
         if DT_i < 0.5:
-            G_i = G_i * 0.3
-            base_score *= 0.8  # universal type deduction
+            base_score *= 0.7  # deducing for type mismatch
 
-        final_score = (base_score + intent_bonus) * src_penalty * anti_penalty
+        final_score = (base_score + intent_bonus + (B_i * 0.1) + (A_i * 0.1)) * src_penalty * anti_penalty
 
         breakdown = {
             "semantic": E_i,
@@ -737,10 +755,10 @@ def rank_datasets(
             "quality": Q_i,
             "popularity": P_i,
             "graph": G_i,
-            "source_trust": trust_score,
+            "trust": trust_score,
             "freshness": F_i,
-            "intent_bonus": intent_bonus,
-            "anti_keyword_penalty": anti_penalty,
+            "benchmark_bonus": B_i,
+            "annotation_bonus": A_i
         }
         ds["ranking_breakdown"] = breakdown
         ds["raw_similarity_score"] = final_score
@@ -761,4 +779,23 @@ def rank_datasets(
             ds["similarity_score"] = float(normalized_score * 0.85)
 
     ranked = sorted(final_candidates, key=lambda x: x["similarity_score"], reverse=True)
-    return ranked[:top_k]
+    
+    # Apply categorization (Fix 7/10: Split Results)
+    all_practical = []
+    all_research = []
+    academic_sources = ["ieee", "arxiv", "semantic_scholar", "semanticscholar"]
+    
+    for ds in ranked:
+        src = ds.get("source", "").lower()
+        if src in academic_sources or ds.get("is_paper_seed"):
+            ds["dataset_category"] = "research_benchmark"
+            all_research.append(ds)
+        else:
+            ds["dataset_category"] = "practical"
+            all_practical.append(ds)
+            
+    return {
+        "all": ranked[:top_k],
+        "practical": all_practical[:top_k],
+        "research_benchmarks": all_research[:top_k]
+    }

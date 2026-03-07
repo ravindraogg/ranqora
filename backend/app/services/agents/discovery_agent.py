@@ -136,7 +136,8 @@ class DiscoveryAgent:
             if emit:
                 await emit({"stage": "0.5", "text": "Discovering benchmark datasets from research papers..."})
 
-            paper_metadata = await paper_discovery.discover(search_query)
+            # Fix: Pass request to track abortion
+            paper_metadata = await paper_discovery.discover(search_query, request=request)
             if paper_metadata:
                 memory.log_reasoning(f"Paper discovery found {len(paper_metadata)} dataset seeds.")
                 memory.record_paper_discovery([m["name"] for m in paper_metadata])
@@ -228,6 +229,8 @@ class DiscoveryAgent:
             memory.iteration_count = 2
             remaining_queries = [q for q in planned_queries if q != search_query and q not in memory.explored_queries]
 
+            await check_abort()
+
             if remaining_queries:
                 if emit:
                     await emit({"stage": 1, "text": f"[Iter 2] Running {len(remaining_queries)} planned queries in parallel..."})
@@ -255,6 +258,7 @@ class DiscoveryAgent:
             expansions = memory.suggest_expansions()
 
             if expansions:
+                await check_abort()
                 if emit:
                     await emit({"stage": 1, "text": f"[Iter 3] Agent expanding: {expansions[:3]}..."})
 
@@ -481,8 +485,12 @@ class DiscoveryAgent:
             # 1. Embed query
             emb = get_embedding(query)
             
-            # 2. Vector search in graph (Fix 1 logic)
-            neighbors = graph_service.vector_search(emb.tolist(), top_k=20)
+            # 2. Vector search in graph (Fix 1: Using specialized TITLE index)
+            neighbors = graph_service.vector_search(emb.tolist(), top_k=25, index_name='dataset_title_vector_index')
+            if not neighbors:
+                # Fallback to general index if title index is empty
+                neighbors = graph_service.vector_search(emb.tolist(), top_k=25, index_name='dataset_vector_index')
+            
             if not neighbors:
                 return []
             
