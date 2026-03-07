@@ -869,7 +869,7 @@ function SearchResultsContent() {
                     <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-5">
                         <div className="pb-4 border-b border-gray-100 dark:border-white/5">
                             <p className="text-xs text-gray-400 mb-1">Query</p>
-                            <p className={`text-sm font-medium text-gray-900 dark:text-white leading-relaxed overflow-hidden whitespace-pre-wrap ${isQueryExpanded ? 'max-h-none opacity-100' : 'line-clamp-3 italic opacity-70'}`}>&quot;{displayQuery}&quot;</p>
+                            <p className={`text-sm font-medium text-gray-900 dark:text-white leading-relaxed whitespace-pre-wrap ${isQueryExpanded ? 'line-clamp-none opacity-100' : 'line-clamp-3 italic opacity-70 overflow-hidden'}`}>&quot;{displayQuery}&quot;</p>
                             {isQueryLong && (
                                 <button
                                     onClick={() => setIsQueryExpanded(!isQueryExpanded)}
