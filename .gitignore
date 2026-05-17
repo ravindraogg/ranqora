@@ -1,0 +1,11 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# env files
+.env
+.env.local
+.env.*.local
+
+# log files
+*.log
