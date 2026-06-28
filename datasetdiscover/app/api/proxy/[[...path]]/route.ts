@@ -39,18 +39,22 @@ async function proxyRequest(req: NextRequest, { params }: Context) {
   headers.delete("connection");
 
   try {
-    let body: any = null;
+    let body: ArrayBuffer | undefined = undefined;
     if (req.method !== "GET" && req.method !== "HEAD") {
       body = await req.arrayBuffer();
     }
 
-    const response = await fetch(targetUrl, {
+    const fetchOptions: RequestInit & { duplex?: "half" } = {
       method: req.method,
       headers,
-      body,
-      // @ts-ignore - duplex is needed for streaming support in some environments
-      duplex: body ? "half" : undefined,
-    });
+      body: body instanceof ArrayBuffer ? body : undefined,
+    };
+
+    if (body) {
+      fetchOptions.duplex = "half";
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
 
     const responseHeaders = new Headers(response.headers);
     responseHeaders.delete("content-encoding");
@@ -61,9 +65,10 @@ async function proxyRequest(req: NextRequest, { params }: Context) {
       statusText: response.statusText,
       headers: responseHeaders,
     });
-  } catch (error: any) {
-    console.error(`[Proxy Error] ${error.message}`);
-    return new Response(JSON.stringify({ error: "Proxy connection failed", details: error.message }), { 
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[Proxy Error] ${errorMessage}`);
+    return new Response(JSON.stringify({ error: "Proxy connection failed", details: errorMessage }), { 
       status: 502,
       headers: { "Content-Type": "application/json" }
     });

@@ -9,7 +9,7 @@ export default function NotFound() {
                 </h2>
                 <h3 className="text-2xl font-bold">Page Not Found</h3>
                 <p className="text-gray-600 dark:text-gray-400">
-                    We could not find the page you were looking for. The dataset or resource may have been moved or doesn't exist.
+                    We could not find the page you were looking for. The dataset or resource may have been moved or doesn&apos;t exist.
                 </p>
                 <div className="pt-6">
                     <Link
