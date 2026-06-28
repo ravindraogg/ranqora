@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Database, Search, FileText, Brain, Globe, Code, Zap } from 'lucide-react';
+import { Database, FileText, Brain, Globe, Code, Zap, Shield } from 'lucide-react';
 
 const tools = [
     { name: 'Kaggle', icon: Database, color: 'text-blue-500', bg: 'bg-blue-500/10' },
@@ -13,8 +13,6 @@ const tools = [
     { name: 'GitHub', icon: Code, color: 'text-gray-500', bg: 'bg-gray-500/10' },
 ];
 
-import { Shield } from 'lucide-react';
-
 export function ToolsSection() {
     return (
         <section id="tools" className="py-24 bg-white dark:bg-black overflow-hidden">
@@ -22,7 +20,7 @@ export function ToolsSection() {
                 <div className="text-center mb-16">
                     <h2 className="text-base font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Our Ecosystem</h2>
                     <p className="mt-2 text-4xl font-black text-gray-900 dark:text-white tracking-tight">Connected Data Intelligence</p>
-                    <p className="mt-4 text-lg text-gray-600 dark:text-gray-400">Ranqora orchestrates across the world's leading data and research platforms.</p>
+                    <p className="mt-4 text-lg text-gray-600 dark:text-gray-400">Ranqora orchestrates across the world&apos;s leading data and research platforms.</p>
                 </div>
 
                 <div className="grid grid-cols-2 lg:grid-cols-4 md:grid-cols-3 gap-6">

@@ -4,10 +4,11 @@ import { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import {
     Hexagon, ArrowLeft, Search, Loader2, ExternalLink,
     Download, Heart, Tag, Calendar, BarChart2, X, ChevronRight, ChevronDown, ChevronUp, Clock,
-    Database, Globe, FileText, Brain, Zap, Shield, AlertTriangle, Menu
+    Database, Globe, FileText, Brain, Zap, AlertTriangle, Menu
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 
@@ -565,7 +566,7 @@ function DatasetDetailPanel({ ds, onBack }: { ds: DatasetMetadata; onBack: () =>
                                 <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Image Samples</h4>
                                 <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
                                     {preview.image_urls.slice(0, 10).map((url, i) => (
-                                        <img key={i} src={url} alt={`sample-${i}`} className="rounded-2xl object-cover aspect-square border border-gray-200 dark:border-white/5 bg-gray-100 dark:bg-white/5" />
+                                        <Image key={i} src={url} alt={`sample-${i}`} width={128} height={128} className="rounded-2xl object-cover aspect-square border border-gray-200 dark:border-white/5 bg-gray-100 dark:bg-white/5" />
                                     ))}
                                 </div>
                             </div>
@@ -616,7 +617,6 @@ function SearchResultsContent() {
     const [isResearchExpanded, setIsResearchExpanded] = useState(true);
     const [isQueryExpanded, setIsQueryExpanded] = useState(false);
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-    const [showStagePopup, setShowStagePopup] = useState(true);
     const [showErrorPopup, setShowErrorPopup] = useState(false);
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -627,7 +627,7 @@ function SearchResultsContent() {
     const displayQuery = query;
 
     // ── Live elapsed timer ──────────────────────────────────────────────
-    const timerStartRef = useRef<number>(Date.now());
+    const timerStartRef = useRef<number>(0);
     const [elapsedMs, setElapsedMs] = useState(0);
 
     useEffect(() => {
@@ -641,6 +641,7 @@ function SearchResultsContent() {
 
     useEffect(() => {
         if (apiError) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setShowErrorPopup(true);
             const timer = setTimeout(() => setShowErrorPopup(false), 5000);
             return () => clearTimeout(timer);
@@ -687,6 +688,7 @@ function SearchResultsContent() {
             return () => clearTimeout(timer);
         }
 
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setClientId(resolved);
         if (clientIdFromUrl && !stored) {
             sessionStorage.setItem(SESSION_KEY, clientIdFromUrl);

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useLayoutEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X, Hexagon, Moon, Sun, ChevronDown, Database, Zap, FileText, Brain, Globe, Code, Shield, CheckCircle2, Search } from 'lucide-react';
+import { Menu, X, Hexagon, Moon, Sun, Database, Zap, FileText, Brain, Globe, Code, Shield, CheckCircle2, Search } from 'lucide-react';
 import { motion, AnimatePresence, useScroll, useSpring, useTransform } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import { cn } from '../lib/utils';
@@ -32,7 +32,8 @@ export function Navbar() {
     const navScale = useTransform(scrollSpring, [0, 100], [1, 0.98]);
     const navOpacity = useTransform(scrollSpring, [0, 100], [1, 0.95]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setMounted(true);
     }, []);
 
@@ -159,7 +160,14 @@ export function Navbar() {
     );
 }
 
-function MobileNavItem({ href, icon: Icon, label, onClick }: any) {
+interface MobileNavItemProps {
+    href: string;
+    icon: React.ComponentType<{ className?: string }>;
+    label: string;
+    onClick: () => void;
+}
+
+function MobileNavItem({ href, icon: Icon, label, onClick }: MobileNavItemProps) {
     return (
         <Link
             href={href}

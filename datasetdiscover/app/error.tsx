@@ -36,7 +36,7 @@ export default function Error({
                 </div>
                 <h2 className="text-2xl font-bold">Something went wrong!</h2>
                 <p className="text-gray-600 dark:text-gray-400">
-                    We've encountered an unexpected error. Our system has logged the event, and we will address it shortly.
+                    We&apos;ve encountered an unexpected error. Our system has logged the event, and we will address it shortly.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-4 justify-center mt-8">
                     <button

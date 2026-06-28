@@ -3,7 +3,6 @@
 import { motion } from 'framer-motion';
 import { ChevronRight, Database, Search } from 'lucide-react';
 import Link from 'next/link';
-import { cn } from '../lib/utils';
 
 export function Hero() {
     return (

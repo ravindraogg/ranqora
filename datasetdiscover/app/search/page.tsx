@@ -27,8 +27,10 @@ export default function SearchDashboard() {
     // Step 1: On mount, fetch client_id from backend. 
     // Optimization: Check for existing session first to avoid jitter on fast inputs
     useEffect(() => {
+        let isMounted = true;
+
         const stored = sessionStorage.getItem('ranqora_client_id');
-        if (stored) {
+        if (stored && isMounted) {
             setClientId(stored);
             setIsLoadingAuth(false);
         }
@@ -38,19 +40,27 @@ export default function SearchDashboard() {
                 const res = await fetch(`${API_BASE}/api/auth/client_id`);
                 if (!res.ok) throw new Error(`Server responded ${res.status}`);
                 const data = await res.json();
-                setClientId(data.client_id);
-                sessionStorage.setItem('ranqora_client_id', data.client_id);
-                setAuthError(null);
+                if (isMounted) {
+                    setClientId(data.client_id);
+                    sessionStorage.setItem('ranqora_client_id', data.client_id);
+                    setAuthError(null);
+                }
             } catch (e: unknown) {
                 // Only show error if we don't even have a stored ID
-                if (!stored) {
+                if (!stored && isMounted) {
                     setAuthError(`Could not reach backend: ${(e as Error).message}`);
                 }
             } finally {
-                setIsLoadingAuth(false);
+                if (isMounted) {
+                    setIsLoadingAuth(false);
+                }
             }
         }
         fetchClientId();
+
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
     // Auto-resize textarea up to 5 lines

@@ -132,6 +132,7 @@ export default function TopDatasetsPage() {
         fetchDatasets();
     }, []);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { setVisibleCount(PAGE_SIZE); }, [filter, tagFilter, sortKey, sortDir]);
 
     const handleIntersect = useCallback((entries: IntersectionObserverEntry[]) => {
